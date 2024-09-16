@@ -1,3 +1,5 @@
+use crate::MMU;
+
 pub struct CPU {
     // Registers
     a: u8,
@@ -16,6 +18,9 @@ pub struct CPU {
 
     // Interrupt master enable flag
     ime: bool,
+
+    halt: bool,
+    stop: bool,
 }
 
 // Flag register bits
@@ -27,18 +32,9 @@ const CARRY_FLAG: u8 = 0b0001_0000;
 impl CPU {
     pub fn new() -> Self {
         CPU {
-            a: 0,
-            b: 0,
-            c: 0,
-            d: 0,
-            e: 0,
-            f: 0,
-            h: 0,
-            l: 0,
-            sp: 0,
-            pc: 0,
-            cycles: 0,
-            ime: false,
+            a: 0, b: 0, c: 0, d: 0, e: 0, f: 0, h: 0, l: 0,
+            sp: 0, pc: 0, cycles: 0, ime: false,
+            halt: false, stop: false,
         }
     }
 
@@ -46,18 +42,18 @@ impl CPU {
         self.stop
     }
 
-    pub fn step(&mut self, memory: &mut Memory) -> u32 {
+    pub fn step(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
         self.execute(opcode, memory)
     }
 
-    fn fetch(&mut self, memory: &Memory) -> u8 {
+    fn fetch(&mut self, memory: &MMU) -> u8 {
         let opcode = memory.read_byte(self.pc);
         self.pc = self.pc.wrapping_add(1);
         opcode
     }
 
-    fn execute(&mut self, opcode: u8, memory: &mut Memory) -> u32 {
+    fn execute(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         match opcode {
             0x00 => self.nop(),
             0x01 => self.ld_bc_nn(memory),
@@ -95,7 +91,7 @@ impl CPU {
             
             0x20 => self.jr_nz_n(memory),
             0x21 => self.ld_hl_nn(memory),
-            0x22 => self.ld_hl_inc_a(memory),
+            0x22 => self.ld_hl_a(memory),
             0x23 => self.inc_hl(),
             0x24 => self.inc_h(),
             0x25 => self.dec_h(),
@@ -219,7 +215,7 @@ impl CPU {
             0x94 => self.sub_h(),
             0x95 => self.sub_l(),
             0x96 => self.sub_hl(memory),
-            0x97 => self.sub_a(),
+            //0x97 => self.sub_a(),
             0x98 => self.sbc_a_b(),
             0x99 => self.sbc_a_c(),
             0x9A => self.sbc_a_d(),
@@ -236,7 +232,7 @@ impl CPU {
             0xA4 => self.and_h(),
             0xA5 => self.and_l(),
             0xA6 => self.and_hl(memory),
-            0xA7 => self.and_a(),
+            //0xA7 => self.and_a(),
             0xA8 => self.xor_b(),
             0xA9 => self.xor_c(),
             0xAA => self.xor_d(),
@@ -244,7 +240,7 @@ impl CPU {
             0xAC => self.xor_h(),
             0xAD => self.xor_l(),
             0xAE => self.xor_hl(memory),
-            0xAF => self.xor_a(),
+            //0xAF => self.xor_a(),
             
             0xB0 => self.or_b(),
             0xB1 => self.or_c(),
@@ -253,7 +249,7 @@ impl CPU {
             0xB4 => self.or_h(),
             0xB5 => self.or_l(),
             0xB6 => self.or_hl(memory),
-            0xB7 => self.or_a(),
+            //0xB7 => self.or_a(),
             0xB8 => self.cp_b(),
             0xB9 => self.cp_c(),
             0xBA => self.cp_d(),
@@ -360,7 +356,7 @@ impl CPU {
     }
 
     // 16-bit load instructions
-    fn ld_rr_nn(&mut self, rh: &mut u8, rl: &mut u8, memory: &Memory) -> u32 {
+    fn ld_rr_nn(&mut self, rh: &mut u8, rl: &mut u8, memory: &MMU) -> u32 {
         let low = self.fetch(memory);
         let high = self.fetch(memory);
         *rl = low;
@@ -380,26 +376,15 @@ impl CPU {
         if carry { self.set_flag(CARRY_FLAG); }
     }
 
-    fn sub_a(&mut self, n: u8) {
-        let (result, carry) = self.a.overflowing_sub(n);
-        let half_carry = (self.a & 0xF) < (n & 0xF);
-        
-        self.a = result;
-        self.f = SUBTRACT_FLAG;
-        if result == 0 { self.set_flag(ZERO_FLAG); }
-        if half_carry { self.set_flag(HALF_CARRY_FLAG); }
-        if carry { self.set_flag(CARRY_FLAG); }
-    }
-
     // Implement CPU instructions
 
     fn nop(&mut self) -> u32 { 4 }
 
-    fn ld_bc_nn(&mut self, memory: &Memory) -> u32 {
+    fn ld_bc_nn(&mut self, memory: &MMU) -> u32 {
         self.ld_rr_nn(&mut self.b, &mut self.c, memory)
     }
 
-    fn ld_bc_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_bc_a(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.c, self.b]);
         memory.write_byte(address, self.a);
         8
@@ -430,7 +415,7 @@ impl CPU {
         4
     }
 
-    fn ld_b_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_b_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.b, self.fetch(memory))
     }
 
@@ -442,7 +427,7 @@ impl CPU {
         4
     }
 
-    fn ld_nn_sp(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_nn_sp(&mut self, memory: &mut MMU) -> u32 {
         let low = self.fetch(memory);
         let high = self.fetch(memory);
         let address = u16::from_le_bytes([low, high]);
@@ -465,7 +450,7 @@ impl CPU {
         8
     }
 
-    fn ld_a_bc(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_bc(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.c, self.b]);
         self.a = memory.read_byte(address);
         8
@@ -496,7 +481,7 @@ impl CPU {
         4
     }
 
-    fn ld_c_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_c_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.c, self.fetch(memory))
     }
 
@@ -508,16 +493,11 @@ impl CPU {
         4
     }
 
-    fn stop(&mut self) -> u32 {
-        // Implement STOP instruction
-        4
-    }
-
-    fn ld_de_nn(&mut self, memory: &Memory) -> u32 {
+    fn ld_de_nn(&mut self, memory: &MMU) -> u32 {
         self.ld_rr_nn(&mut self.d, &mut self.e, memory)
     }
 
-    fn ld_de_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_de_a(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.e, self.d]);
         memory.write_byte(address, self.a);
         8
@@ -548,7 +528,7 @@ impl CPU {
         4
     }
 
-    fn ld_d_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_d_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.d, self.fetch(memory))
     }
 
@@ -561,7 +541,7 @@ impl CPU {
         4
     }
 
-    fn jr_n(&mut self, memory: &Memory) -> u32 {
+    fn jr_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8;
         self.pc = self.pc.wrapping_add(n as u16);
         12
@@ -580,7 +560,7 @@ impl CPU {
         8
     }
 
-    fn ld_a_de(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_de(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.e, self.d]);
         self.a = memory.read_byte(address);
         8
@@ -611,7 +591,7 @@ impl CPU {
         4
     }
 
-    fn ld_e_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_e_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.e, self.fetch(memory))
     }
 
@@ -624,7 +604,7 @@ impl CPU {
         4
     }
 
-    fn jr_nz_n(&mut self, memory: &Memory) -> u32 {
+    fn jr_nz_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8;
         if !self.is_flag_set(ZERO_FLAG) {
             self.pc = self.pc.wrapping_add(n as u16);
@@ -634,11 +614,11 @@ impl CPU {
         }
     }
 
-    fn ld_hl_nn(&mut self, memory: &Memory) -> u32 {
+    fn ld_hl_nn(&mut self, memory: &MMU) -> u32 {
         self.ld_rr_nn(&mut self.h, &mut self.l, memory)
     }
 
-    fn ld_hl_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_a(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.a);
         8
@@ -669,7 +649,7 @@ impl CPU {
         4
     }
 
-    fn ld_h_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_h_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.h, self.fetch(memory))
     }
 
@@ -705,7 +685,7 @@ impl CPU {
         4
     }
 
-    fn jr_z_n(&mut self, memory: &Memory) -> u32 {
+    fn jr_z_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8;
         if self.is_flag_set(ZERO_FLAG) {
             self.pc = self.pc.wrapping_add(n as u16);
@@ -727,7 +707,7 @@ impl CPU {
         8
     }
 
-    fn ld_a_hl_inc(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_hl_inc(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.a = memory.read_byte(address);
         let new_hl = address.wrapping_add(1);
@@ -762,17 +742,11 @@ impl CPU {
         4
     }
 
-    fn ld_l_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_l_n(&mut self, memory: &MMU) -> u32 {
         self.ld_r_n(&mut self.l, self.fetch(memory))
     }
 
-    fn cpl(&mut self) -> u32 {
-        self.a = !self.a;
-        self.set_flag(SUBTRACT_FLAG | HALF_CARRY_FLAG);
-        4
-    }
-
-    fn jr_nc_n(&mut self, memory: &Memory) -> u32 {
+    fn jr_nc_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8;
         if !self.is_flag_set(CARRY_FLAG) {
             self.pc = self.pc.wrapping_add(n as u16);
@@ -782,14 +756,14 @@ impl CPU {
         }
     }
 
-    fn ld_sp_nn(&mut self, memory: &Memory) -> u32 {
+    fn ld_sp_nn(&mut self, memory: &MMU) -> u32 {
         let low = self.fetch(memory);
         let high = self.fetch(memory);
         self.sp = u16::from_le_bytes([low, high]);
         12
     }
 
-    fn ld_hl_dec_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_dec_a(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.a);
         let new_hl = address.wrapping_sub(1);
@@ -804,7 +778,7 @@ impl CPU {
         8
     }
 
-    fn inc_hl_addr(&mut self, memory: &mut Memory) -> u32 {
+    fn inc_hl_addr(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         let result = value.wrapping_add(1);
@@ -815,7 +789,7 @@ impl CPU {
         12
     }
 
-    fn dec_hl_addr(&mut self, memory: &mut Memory) -> u32 {
+    fn dec_hl_addr(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         let result = value.wrapping_sub(1);
@@ -826,20 +800,14 @@ impl CPU {
         12
     }
 
-    fn ld_hl_n(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_n(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = self.fetch(memory);
         memory.write_byte(address, value);
         12
     }
 
-    fn scf(&mut self) -> u32 {
-        self.set_flag(CARRY_FLAG);
-        self.clear_flag(SUBTRACT_FLAG | HALF_CARRY_FLAG);
-        4
-    }
-
-    fn jr_c_n(&mut self, memory: &Memory) -> u32 {
+    fn jr_c_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8;
         if self.is_flag_set(CARRY_FLAG) {
             self.pc = self.pc.wrapping_add(n as u16);
@@ -861,7 +829,7 @@ impl CPU {
         8
     }
 
-    fn ld_a_hl_dec(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_hl_dec(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.a = memory.read_byte(address);
         let new_hl = address.wrapping_sub(1);
@@ -892,19 +860,9 @@ impl CPU {
         4
     }
 
-    fn ld_a_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_n(&mut self, memory: &MMU) -> u32 {
         self.a = self.fetch(memory);
         8
-    }
-
-    fn ccf(&mut self) -> u32 {
-        if self.is_flag_set(CARRY_FLAG) {
-            self.clear_flag(CARRY_FLAG);
-        } else {
-            self.set_flag(CARRY_FLAG);
-        }
-        self.clear_flag(SUBTRACT_FLAG | HALF_CARRY_FLAG);
-        4
     }
 
     fn ld_b_b(&mut self) -> u32 { 4 }
@@ -913,7 +871,7 @@ impl CPU {
     fn ld_b_e(&mut self) -> u32 { self.b = self.e; 4 }
     fn ld_b_h(&mut self) -> u32 { self.b = self.h; 4 }
     fn ld_b_l(&mut self) -> u32 { self.b = self.l; 4 }
-    fn ld_b_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_b_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.b = memory.read_byte(address);
         8
@@ -926,7 +884,7 @@ impl CPU {
     fn ld_c_e(&mut self) -> u32 { self.c = self.e; 4 }
     fn ld_c_h(&mut self) -> u32 { self.c = self.h; 4 }
     fn ld_c_l(&mut self) -> u32 { self.c = self.l; 4 }
-    fn ld_c_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_c_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.c = memory.read_byte(address);
         8
@@ -939,7 +897,7 @@ impl CPU {
     fn ld_d_e(&mut self) -> u32 { self.d = self.e; 4 }
     fn ld_d_h(&mut self) -> u32 { self.d = self.h; 4 }
     fn ld_d_l(&mut self) -> u32 { self.d = self.l; 4 }
-    fn ld_d_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_d_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.d = memory.read_byte(address);
         8
@@ -952,7 +910,7 @@ impl CPU {
     fn ld_e_e(&mut self) -> u32 { 4 }
     fn ld_e_h(&mut self) -> u32 { self.e = self.h; 4 }
     fn ld_e_l(&mut self) -> u32 { self.e = self.l; 4 }
-    fn ld_e_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_e_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.e = memory.read_byte(address);
         8
@@ -965,7 +923,7 @@ impl CPU {
     fn ld_h_e(&mut self) -> u32 { self.h = self.e; 4 }
     fn ld_h_h(&mut self) -> u32 { 4 }
     fn ld_h_l(&mut self) -> u32 { self.h = self.l; 4 }
-    fn ld_h_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_h_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.h = memory.read_byte(address);
         8
@@ -978,47 +936,42 @@ impl CPU {
     fn ld_l_e(&mut self) -> u32 { self.l = self.e; 4 }
     fn ld_l_h(&mut self) -> u32 { self.l = self.h; 4 }
     fn ld_l_l(&mut self) -> u32 { 4 }
-    fn ld_l_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_l_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.l = memory.read_byte(address);
         8
     }
     fn ld_l_a(&mut self) -> u32 { self.l = self.a; 4 }
 
-    fn ld_hl_b(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_b(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.b);
         8
     }
-    fn ld_hl_c(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_c(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.c);
         8
     }
-    fn ld_hl_d(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_d(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.d);
         8
     }
-    fn ld_hl_e(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_e(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.e);
         8
     }
-    fn ld_hl_h(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_h(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.h);
         8
     }
-    fn ld_hl_l(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_hl_l(&mut self, memory: &mut MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         memory.write_byte(address, self.l);
         8
-    }
-
-    fn halt(&mut self) -> u32 {
-        // Implement HALT instruction
-        4
     }
 
     fn ld_a_b(&mut self) -> u32 { self.a = self.b; 4 }
@@ -1027,7 +980,7 @@ impl CPU {
     fn ld_a_e(&mut self) -> u32 { self.a = self.e; 4 }
     fn ld_a_h(&mut self) -> u32 { self.a = self.h; 4 }
     fn ld_a_l(&mut self) -> u32 { self.a = self.l; 4 }
-    fn ld_a_hl(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         self.a = memory.read_byte(address);
         8
@@ -1040,7 +993,7 @@ impl CPU {
     fn add_a_e(&mut self) -> u32 { self.add_a(self.e); 4 }
     fn add_a_h(&mut self) -> u32 { self.add_a(self.h); 4 }
     fn add_a_l(&mut self) -> u32 { self.add_a(self.l); 4 }
-    fn add_a_hl(&mut self, memory: &Memory) -> u32 {
+    fn add_a_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.add_a(value);
@@ -1054,7 +1007,7 @@ impl CPU {
     fn adc_a_e(&mut self) -> u32 { self.adc_a(self.e); 4 }
     fn adc_a_h(&mut self) -> u32 { self.adc_a(self.h); 4 }
     fn adc_a_l(&mut self) -> u32 { self.adc_a(self.l); 4 }
-    fn adc_a_hl(&mut self, memory: &Memory) -> u32 {
+    fn adc_a_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.adc_a(value);
@@ -1068,13 +1021,12 @@ impl CPU {
     fn sub_e(&mut self) -> u32 { self.sub_a(self.e); 4 }
     fn sub_h(&mut self) -> u32 { self.sub_a(self.h); 4 }
     fn sub_l(&mut self) -> u32 { self.sub_a(self.l); 4 }
-    fn sub_hl(&mut self, memory: &Memory) -> u32 {
+    fn sub_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.sub_a(value);
         8
     }
-    fn sub_a(&mut self) -> u32 { self.sub_a(self.a); 4 }
 
     fn sbc_a_b(&mut self) -> u32 { self.sbc_a(self.b); 4 }
     fn sbc_a_c(&mut self) -> u32 { self.sbc_a(self.c); 4 }
@@ -1082,7 +1034,7 @@ impl CPU {
     fn sbc_a_e(&mut self) -> u32 { self.sbc_a(self.e); 4 }
     fn sbc_a_h(&mut self) -> u32 { self.sbc_a(self.h); 4 }
     fn sbc_a_l(&mut self) -> u32 { self.sbc_a(self.l); 4 }
-    fn sbc_a_hl(&mut self, memory: &Memory) -> u32 {
+    fn sbc_a_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.sbc_a(value);
@@ -1096,13 +1048,12 @@ impl CPU {
     fn and_e(&mut self) -> u32 { self.and_a(self.e); 4 }
     fn and_h(&mut self) -> u32 { self.and_a(self.h); 4 }
     fn and_l(&mut self) -> u32 { self.and_a(self.l); 4 }
-    fn and_hl(&mut self, memory: &Memory) -> u32 {
+    fn and_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.and_a(value);
         8
     }
-    fn and_a(&mut self) -> u32 { self.and_a(self.a); 4 }
 
     fn xor_b(&mut self) -> u32 { self.xor_a(self.b); 4 }
     fn xor_c(&mut self) -> u32 { self.xor_a(self.c); 4 }
@@ -1110,13 +1061,12 @@ impl CPU {
     fn xor_e(&mut self) -> u32 { self.xor_a(self.e); 4 }
     fn xor_h(&mut self) -> u32 { self.xor_a(self.h); 4 }
     fn xor_l(&mut self) -> u32 { self.xor_a(self.l); 4 }
-    fn xor_hl(&mut self, memory: &Memory) -> u32 {
+    fn xor_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.xor_a(value);
         8
     }
-    fn xor_a(&mut self) -> u32 { self.xor_a(self.a); 4 }
 
     fn or_b(&mut self) -> u32 { self.or_a(self.b); 4 }
     fn or_c(&mut self) -> u32 { self.or_a(self.c); 4 }
@@ -1124,13 +1074,12 @@ impl CPU {
     fn or_e(&mut self) -> u32 { self.or_a(self.e); 4 }
     fn or_h(&mut self) -> u32 { self.or_a(self.h); 4 }
     fn or_l(&mut self) -> u32 { self.or_a(self.l); 4 }
-    fn or_hl(&mut self, memory: &Memory) -> u32 {
+    fn or_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.or_a(value);
         8
     }
-    fn or_a(&mut self) -> u32 { self.or_a(self.a); 4 }
 
     fn cp_b(&mut self) -> u32 { self.cp_a(self.b); 4 }
     fn cp_c(&mut self) -> u32 { self.cp_a(self.c); 4 }
@@ -1138,7 +1087,7 @@ impl CPU {
     fn cp_e(&mut self) -> u32 { self.cp_a(self.e); 4 }
     fn cp_h(&mut self) -> u32 { self.cp_a(self.h); 4 }
     fn cp_l(&mut self) -> u32 { self.cp_a(self.l); 4 }
-    fn cp_hl(&mut self, memory: &Memory) -> u32 {
+    fn cp_hl(&mut self, memory: &MMU) -> u32 {
         let address = u16::from_le_bytes([self.l, self.h]);
         let value = memory.read_byte(address);
         self.cp_a(value);
@@ -1146,7 +1095,7 @@ impl CPU {
     }
     fn cp_a(&mut self) -> u32 { self.cp_a(self.a); 4 }
 
-    fn ret_nz(&mut self, memory: &Memory) -> u32 {
+    fn ret_nz(&mut self, memory: &MMU) -> u32 {
         if !self.is_flag_set(ZERO_FLAG) {
             self.ret(memory);
             20
@@ -1155,13 +1104,13 @@ impl CPU {
         }
     }
 
-    fn pop_bc(&mut self, memory: &Memory) -> u32 {
+    fn pop_bc(&mut self, memory: &MMU) -> u32 {
         let value = self.pop_stack(memory);
         self.set_bc(value);
         12
     }
 
-    fn jp_nz_nn(&mut self, memory: &Memory) -> u32 {
+    fn jp_nz_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         if !self.is_flag_set(ZERO_FLAG) {
             self.pc = address;
@@ -1171,13 +1120,13 @@ impl CPU {
         }
     }
 
-    fn jp_nn(&mut self, memory: &Memory) -> u32 {
+    fn jp_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         self.pc = address;
         16
     }
 
-    fn call_nz_nn(&mut self, memory: &mut Memory) -> u32 {
+    fn call_nz_nn(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         if !self.is_flag_set(ZERO_FLAG) {
             self.push_stack(memory, self.pc);
@@ -1188,24 +1137,24 @@ impl CPU {
         }
     }
 
-    fn push_bc(&mut self, memory: &mut Memory) -> u32 {
+    fn push_bc(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.get_bc());
         16
     }
 
-    fn add_a_n(&mut self, memory: &Memory) -> u32 {
+    fn add_a_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.add_a(value);
         8
     }
 
-    fn rst_00h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_00h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0000;
         16
     }
 
-    fn ret_z(&mut self, memory: &Memory) -> u32 {
+    fn ret_z(&mut self, memory: &MMU) -> u32 {
         if self.is_flag_set(ZERO_FLAG) {
             self.ret(memory);
             20
@@ -1214,12 +1163,12 @@ impl CPU {
         }
     }
 
-    fn ret(&mut self, memory: &Memory) -> u32 {
+    fn ret(&mut self, memory: &MMU) -> u32 {
         self.pc = self.pop_stack(memory);
         16
     }
 
-    fn jp_z_nn(&mut self, memory: &Memory) -> u32 {
+    fn jp_z_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         if self.is_flag_set(ZERO_FLAG) {
             self.pc = address;
@@ -1229,7 +1178,7 @@ impl CPU {
         }
     }
 
-    fn call_z_nn(&mut self, memory: &mut Memory) -> u32 {
+    fn call_z_nn(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         if self.is_flag_set(ZERO_FLAG) {
             self.push_stack(memory, self.pc);
@@ -1240,26 +1189,26 @@ impl CPU {
         }
     }
 
-    fn call_nn(&mut self, memory: &mut Memory) -> u32 {
+    fn call_nn(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         self.push_stack(memory, self.pc);
         self.pc = address;
         24
     }
 
-    fn adc_a_n(&mut self, memory: &Memory) -> u32 {
+    fn adc_a_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.adc_a(value);
         8
     }
 
-    fn rst_08h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_08h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0008;
         16
     }
 
-    fn ret_nc(&mut self, memory: &Memory) -> u32 {
+    fn ret_nc(&mut self, memory: &MMU) -> u32 {
         if !self.is_flag_set(CARRY_FLAG) {
             self.ret(memory);
             20
@@ -1268,13 +1217,13 @@ impl CPU {
         }
     }
 
-    fn pop_de(&mut self, memory: &Memory) -> u32 {
+    fn pop_de(&mut self, memory: &MMU) -> u32 {
         let value = self.pop_stack(memory);
         self.set_de(value);
         12
     }
 
-    fn jp_nc_nn(&mut self, memory: &Memory) -> u32 {
+    fn jp_nc_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         if !self.is_flag_set(CARRY_FLAG) {
             self.pc = address;
@@ -1284,7 +1233,7 @@ impl CPU {
         }
     }
 
-    fn call_nc_nn(&mut self, memory: &mut Memory) -> u32 {
+    fn call_nc_nn(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         if !self.is_flag_set(CARRY_FLAG) {
             self.push_stack(memory, self.pc);
@@ -1295,24 +1244,24 @@ impl CPU {
         }
     }
 
-    fn push_de(&mut self, memory: &mut Memory) -> u32 {
+    fn push_de(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.get_de());
         16
     }
 
-    fn sub_n(&mut self, memory: &Memory) -> u32 {
+    fn sub_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.sub_a(value);
         8
     }
 
-    fn rst_10h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_10h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0010;
         16
     }
 
-    fn ret_c(&mut self, memory: &Memory) -> u32 {
+    fn ret_c(&mut self, memory: &MMU) -> u32 {
         if self.is_flag_set(CARRY_FLAG) {
             self.ret(memory);
             20
@@ -1321,13 +1270,13 @@ impl CPU {
         }
     }
 
-    fn reti(&mut self, memory: &Memory) -> u32 {
+    fn reti(&mut self, memory: &MMU) -> u32 {
         self.ret(memory);
         self.ime = true;
         16
     }
 
-    fn jp_c_nn(&mut self, memory: &Memory) -> u32 {
+    fn jp_c_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         if self.is_flag_set(CARRY_FLAG) {
             self.pc = address;
@@ -1337,7 +1286,7 @@ impl CPU {
         }
     }
 
-    fn call_c_nn(&mut self, memory: &mut Memory) -> u32 {
+    fn call_c_nn(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         if self.is_flag_set(CARRY_FLAG) {
             self.push_stack(memory, self.pc);
@@ -1348,55 +1297,55 @@ impl CPU {
         }
     }
 
-    fn sbc_a_n(&mut self, memory: &Memory) -> u32 {
+    fn sbc_a_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.sbc_a(value);
         8
     }
 
-    fn rst_18h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_18h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0018;
         16
     }
 
-    fn ldh_n_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ldh_n_a(&mut self, memory: &mut MMU) -> u32 {
         let offset = self.fetch(memory);
         let address = 0xFF00 | (offset as u16);
         memory.write_byte(address, self.a);
         12
     }
 
-    fn pop_hl(&mut self, memory: &Memory) -> u32 {
+    fn pop_hl(&mut self, memory: &MMU) -> u32 {
         let value = self.pop_stack(memory);
         self.set_hl(value);
         12
     }
 
-    fn ldh_c_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ldh_c_a(&mut self, memory: &mut MMU) -> u32 {
         let address = 0xFF00 | (self.c as u16);
         memory.write_byte(address, self.a);
         8
     }
 
-    fn push_hl(&mut self, memory: &mut Memory) -> u32 {
+    fn push_hl(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.get_hl());
         16
     }
 
-    fn and_n(&mut self, memory: &Memory) -> u32 {
+    fn and_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.and_a(value);
         8
     }
 
-    fn rst_20h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_20h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0020;
         16
     }
 
-    fn add_sp_n(&mut self, memory: &Memory) -> u32 {
+    fn add_sp_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory) as i8 as i16 as u16;
         let (result, carry) = self.sp.overflowing_add(value);
         self.sp = result;
@@ -1413,38 +1362,38 @@ impl CPU {
         4
     }
 
-    fn ld_nn_a(&mut self, memory: &mut Memory) -> u32 {
+    fn ld_nn_a(&mut self, memory: &mut MMU) -> u32 {
         let address = self.fetch_word(memory);
         memory.write_byte(address, self.a);
         16
     }
 
-    fn xor_n(&mut self, memory: &Memory) -> u32 {
+    fn xor_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.xor_a(value);
         8
     }
 
-    fn rst_28h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_28h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0028;
         16
     }
 
-    fn ldh_a_n(&mut self, memory: &Memory) -> u32 {
+    fn ldh_a_n(&mut self, memory: &MMU) -> u32 {
         let offset = self.fetch(memory);
         let address = 0xFF00 | (offset as u16);
         self.a = memory.read_byte(address);
         12
     }
 
-    fn pop_af(&mut self, memory: &Memory) -> u32 {
+    fn pop_af(&mut self, memory: &MMU) -> u32 {
         let value = self.pop_stack(memory);
         self.set_af(value);
         12
     }
 
-    fn ldh_a_c(&mut self, memory: &Memory) -> u32 {
+    fn ldh_a_c(&mut self, memory: &MMU) -> u32 {
         let address = 0xFF00 | (self.c as u16);
         self.a = memory.read_byte(address);
         8
@@ -1455,24 +1404,24 @@ impl CPU {
         4
     }
 
-    fn push_af(&mut self, memory: &mut Memory) -> u32 {
+    fn push_af(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.get_af());
         16
     }
 
-    fn or_n(&mut self, memory: &Memory) -> u32 {
+    fn or_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.or_a(value);
         8
     }
 
-    fn rst_30h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_30h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0030;
         16
     }
 
-    fn ld_hl_sp_n(&mut self, memory: &Memory) -> u32 {
+    fn ld_hl_sp_n(&mut self, memory: &MMU) -> u32 {
         let n = self.fetch(memory) as i8 as i16;
         let (result, carry) = self.sp.overflowing_add(n as u16);
         self.set_hl(result);
@@ -1489,7 +1438,7 @@ impl CPU {
         8
     }
 
-    fn ld_a_nn(&mut self, memory: &Memory) -> u32 {
+    fn ld_a_nn(&mut self, memory: &MMU) -> u32 {
         let address = self.fetch_word(memory);
         self.a = memory.read_byte(address);
         16
@@ -1500,13 +1449,13 @@ impl CPU {
         4
     }
 
-    fn cp_n(&mut self, memory: &Memory) -> u32 {
+    fn cp_n(&mut self, memory: &MMU) -> u32 {
         let value = self.fetch(memory);
         self.cp_a(value);
         8
     }
 
-    fn rst_38h(&mut self, memory: &mut Memory) -> u32 {
+    fn rst_38h(&mut self, memory: &mut MMU) -> u32 {
         self.push_stack(memory, self.pc);
         self.pc = 0x0038;
         16
@@ -1514,20 +1463,20 @@ impl CPU {
 
     // Helper methods
 
-    fn fetch_word(&mut self, memory: &Memory) -> u16 {
+    fn fetch_word(&mut self, memory: &MMU) -> u16 {
         let low = self.fetch(memory);
         let high = self.fetch(memory);
         u16::from_le_bytes([low, high])
     }
 
-    fn push_stack(&mut self, memory: &mut Memory, value: u16) {
+    fn push_stack(&mut self, memory: &mut MMU, value: u16) {
         self.sp = self.sp.wrapping_sub(2);
         let [low, high] = value.to_le_bytes();
         memory.write_byte(self.sp, low);
         memory.write_byte(self.sp.wrapping_add(1), high);
     }
 
-    fn pop_stack(&mut self, memory: &Memory) -> u16 {
+    fn pop_stack(&mut self, memory: &MMU) -> u16 {
         let low = memory.read_byte(self.sp);
         let high = memory.read_byte(self.sp.wrapping_add(1));
         self.sp = self.sp.wrapping_add(2);
@@ -1535,17 +1484,6 @@ impl CPU {
     }
 
     // Arithmetic and logical operations
-
-    fn add_a(&mut self, n: u8) {
-        let (result, carry) = self.a.overflowing_add(n);
-        let half_carry = (self.a & 0xF) + (n & 0xF) > 0xF;
-
-        self.a = result;
-        self.f = 0;
-        if result == 0 { self.set_flag(ZERO_FLAG); }
-        if half_carry { self.set_flag(HALF_CARRY_FLAG); }
-        if carry { self.set_flag(CARRY_FLAG); }
-    }
 
     fn adc_a(&mut self, n: u8) {
         let carry = if self.is_flag_set(CARRY_FLAG) { 1 } else { 0 };
@@ -1654,7 +1592,7 @@ impl CPU {
 
     // CB-prefixed instructions
 
-    fn execute_cb(&mut self, memory: &mut Memory) -> u32 {
+    fn execute_cb(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
         match opcode {
             0x00..=0x07 => self.rlc_r(opcode & 0x07),
@@ -1782,7 +1720,7 @@ impl CPU {
         8
     }
 
-    fn get_r(&self, r: u8) -> u8 {
+    fn get_r(&self, r: u8, memory: &MMU) -> u8 {
         match r {
             0 => self.b,
             1 => self.c,
@@ -1790,13 +1728,13 @@ impl CPU {
             3 => self.e,
             4 => self.h,
             5 => self.l,
-            6 => self.memory.read_byte(self.get_hl()),
+            6 => memory.read_byte(self.get_hl()),
             7 => self.a,
             _ => panic!("Invalid register index"),
         }
     }
 
-    fn set_r(&mut self, r: u8, value: u8) {
+    fn set_r(&mut self, r: u8, value: u8, memory: &mut MMU) {
         match r {
             0 => self.b = value,
             1 => self.c = value,
@@ -1806,7 +1744,7 @@ impl CPU {
             5 => self.l = value,
             6 => {
                 let address = self.get_hl();
-                self.memory.write_byte(address, value);
+                memory.write_byte(address, value);
             },
             7 => self.a = value,
             _ => panic!("Invalid register index"),
@@ -1814,7 +1752,7 @@ impl CPU {
     }
 
     // Interrupt handling
-    pub fn handle_interrupts(&mut self, memory: &mut Memory, interrupts: u8) -> bool {
+    pub fn handle_interrupts(&mut self, memory: &mut MMU, interrupts: u8) -> bool {
         if !self.ime {
             return false;
         }
@@ -1969,7 +1907,7 @@ impl CPU {
     }
 
     // Helper method for prefix CB instructions
-    fn prefix_cb(&mut self, memory: &mut Memory) -> u32 {
+    fn prefix_cb(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
         match opcode {
             0x00..=0x3F => self.rotate_shift(opcode),

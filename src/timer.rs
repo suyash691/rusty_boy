@@ -9,7 +9,7 @@ impl Timer {
         }
     }
 
-    pub fn update(&mut self, cycles: u32) {
-        // Implement timer update logic
+    pub fn update(&mut self, _cycles: u32) {
+        // Implementation
     }
 }

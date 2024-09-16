@@ -59,7 +59,7 @@ impl MMU {
         Ok(())
     }
 
-    pub fn rb(&self, addr: u16) -> u8 {
+    pub fn read_byte(&self, addr: u16) -> u8 {
         match addr & 0xF000 {
             0x0000 => {
                 if self.in_bios {
@@ -111,7 +111,7 @@ impl MMU {
         (self.rb(addr) as u16) | ((self.rb(addr + 1) as u16) << 8)
     }
 
-    pub fn wb(&mut self, addr: u16, val: u8) {
+    pub fn write_byte(&mut self, addr: u16, val: u8) {
         match addr & 0xF000 {
             0x0000..=0x7000 => {
                 // ROM, read-only
