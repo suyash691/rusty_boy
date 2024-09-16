@@ -108,7 +108,7 @@ impl MMU {
     }
 
     pub fn rw(&self, addr: u16) -> u16 {
-        (self.rb(addr) as u16) | ((self.rb(addr + 1) as u16) << 8)
+        (self.read_byte(addr) as u16) | ((self.read_byte(addr + 1) as u16) << 8)
     }
 
     pub fn write_byte(&mut self, addr: u16, val: u8) {
@@ -146,7 +146,7 @@ impl MMU {
     }
 
     pub fn ww(&mut self, addr: u16, val: u16) {
-        self.wb(addr, (val & 255) as u8);
-        self.wb(addr + 1, (val >> 8) as u8);
+        self.write_byte(addr, (val & 255) as u8);
+        self.write_byte(addr + 1, (val >> 8) as u8);
     }
 }
