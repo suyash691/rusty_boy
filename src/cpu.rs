@@ -257,7 +257,7 @@ impl CPU {
             0xBC => self.cp_h(),
             0xBD => self.cp_l(),
             0xBE => self.cp_hl(memory),
-            0xBF => self.cp_a(),
+            //0xBF => self.cp_a(),
             
             0xC0 => self.ret_nz(memory),
             0xC1 => self.pop_bc(memory),
@@ -345,23 +345,61 @@ impl CPU {
     }
 
     // 8-bit load instructions
-    fn ld_r_n(&mut self, r: &mut u8, n: u8) -> u32 {
-        *r = n;
+    fn ld_r_n(&mut self, r: u8, n: u8) -> u32 {
+        match r {
+            0 => self.b = n,
+            1 => self.c = n,
+            2 => self.d = n,
+            3 => self.e = n,
+            4 => self.h = n,
+            5 => self.l = n,
+            7 => self.a = n,
+            _ => panic!("Invalid register index"),
+        }
         8
     }
 
-    fn ld_r1_r2(&mut self, r1: &mut u8, r2: u8) -> u32 {
-        *r1 = r2;
-        4
+    fn ld_r1_r2(&mut self, r1: u8, r2: u8) -> u32 {
+        let value = self.get_register(r2);
+        self.set_register(r1, value);
+        4 // This instruction takes 4 clock cycles
+    }
+
+    fn get_register(&self, r: u8) -> u8 {
+        match r {
+            0 => self.b,
+            1 => self.c,
+            2 => self.d,
+            3 => self.e,
+            4 => self.h,
+            5 => self.l,
+            6 => self.get_hl() as u8,
+            7 => self.a,
+            _ => panic!("Invalid register index"),
+        }
     }
 
     // 16-bit load instructions
-    fn ld_rr_nn(&mut self, rh: &mut u8, rl: &mut u8, memory: &MMU) -> u32 {
+    fn ld_rr_nn(&mut self, r1: u8, r2: u8, memory: &MMU) -> u32 {
         let low = self.fetch(memory);
         let high = self.fetch(memory);
-        *rl = low;
-        *rh = high;
+        self.set_register(r1, high);
+        self.set_register(r2, low);
         12
+    }
+
+    fn set_register(&mut self, r: u8, value: u8) {
+        match r {
+            0 => self.b = value,
+            1 => self.c = value,
+            2 => self.d = value,
+            3 => self.e = value,
+            4 => self.h = value,
+            5 => self.l = value,
+            6 => self.sp = (self.sp & 0xFF00) | (value as u16),
+            7 => self.sp = (self.sp & 0x00FF) | ((value as u16) << 8),
+            _ => panic!("Invalid register index"),
+        }
     }
 
     // Arithmetic instructions
@@ -381,7 +419,7 @@ impl CPU {
     fn nop(&mut self) -> u32 { 4 }
 
     fn ld_bc_nn(&mut self, memory: &MMU) -> u32 {
-        self.ld_rr_nn(&mut self.b, &mut self.c, memory)
+        self.ld_rr_nn(0, 1, memory)
     }
 
     fn ld_bc_a(&mut self, memory: &mut MMU) -> u32 {
@@ -416,15 +454,8 @@ impl CPU {
     }
 
     fn ld_b_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.b, self.fetch(memory))
-    }
-
-    fn rlca(&mut self) -> u32 {
-        let carry = (self.a & 0x80) >> 7;
-        self.a = (self.a << 1) | carry;
-        self.f = 0;
-        if carry == 1 { self.set_flag(CARRY_FLAG); }
-        4
+        let n = self.fetch(memory);
+        self.ld_r_n(0, n)
     }
 
     fn ld_nn_sp(&mut self, memory: &mut MMU) -> u32 {
@@ -482,19 +513,12 @@ impl CPU {
     }
 
     fn ld_c_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.c, self.fetch(memory))
-    }
-
-    fn rrca(&mut self) -> u32 {
-        let carry = self.a & 0x01;
-        self.a = (self.a >> 1) | (carry << 7);
-        self.f = 0;
-        if carry == 1 { self.set_flag(CARRY_FLAG); }
-        4
+        let n = self.fetch(memory);
+        self.ld_r_n(1, n)
     }
 
     fn ld_de_nn(&mut self, memory: &MMU) -> u32 {
-        self.ld_rr_nn(&mut self.d, &mut self.e, memory)
+        self.ld_rr_nn(2, 3, memory)
     }
 
     fn ld_de_a(&mut self, memory: &mut MMU) -> u32 {
@@ -529,16 +553,8 @@ impl CPU {
     }
 
     fn ld_d_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.d, self.fetch(memory))
-    }
-
-    fn rla(&mut self) -> u32 {
-        let old_carry = if self.is_flag_set(CARRY_FLAG) { 1 } else { 0 };
-        let new_carry = (self.a & 0x80) >> 7;
-        self.a = (self.a << 1) | old_carry;
-        self.f = 0;
-        if new_carry == 1 { self.set_flag(CARRY_FLAG); }
-        4
+        let n = self.fetch(memory);
+        self.ld_r_n(2, n)
     }
 
     fn jr_n(&mut self, memory: &MMU) -> u32 {
@@ -592,16 +608,8 @@ impl CPU {
     }
 
     fn ld_e_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.e, self.fetch(memory))
-    }
-
-    fn rra(&mut self) -> u32 {
-        let old_carry = if self.is_flag_set(CARRY_FLAG) { 0x80 } else { 0 };
-        let new_carry = self.a & 0x01;
-        self.a = (self.a >> 1) | old_carry;
-        self.f = 0;
-        if new_carry == 1 { self.set_flag(CARRY_FLAG); }
-        4
+        let n = self.fetch(memory);
+        self.ld_r_n(3, n)
     }
 
     fn jr_nz_n(&mut self, memory: &MMU) -> u32 {
@@ -615,7 +623,7 @@ impl CPU {
     }
 
     fn ld_hl_nn(&mut self, memory: &MMU) -> u32 {
-        self.ld_rr_nn(&mut self.h, &mut self.l, memory)
+        self.ld_rr_nn(4, 5, memory)
     }
 
     fn ld_hl_a(&mut self, memory: &mut MMU) -> u32 {
@@ -650,39 +658,8 @@ impl CPU {
     }
 
     fn ld_h_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.h, self.fetch(memory))
-    }
-
-    fn daa(&mut self) -> u32 {
-        let mut a = self.a;
-        let mut adjust = if self.is_flag_set(CARRY_FLAG) { 0x60 } else { 0x00 };
-        
-        if self.is_flag_set(HALF_CARRY_FLAG) || (!self.is_flag_set(SUBTRACT_FLAG) && (a & 0x0F) > 9) {
-            adjust |= 0x06;
-        }
-        
-        if self.is_flag_set(CARRY_FLAG) || (!self.is_flag_set(SUBTRACT_FLAG) && a > 0x99) {
-            adjust |= 0x60;
-        }
-        
-        if self.is_flag_set(SUBTRACT_FLAG) {
-            a = a.wrapping_sub(adjust);
-        } else {
-            a = a.wrapping_add(adjust);
-        }
-        
-        self.clear_flag(HALF_CARRY_FLAG | ZERO_FLAG);
-        
-        if (adjust >= 0x60) {
-            self.set_flag(CARRY_FLAG);
-        }
-        
-        if a == 0 {
-            self.set_flag(ZERO_FLAG);
-        }
-        
-        self.a = a;
-        4
+        let n = self.fetch(memory);
+        self.ld_r_n(4, n)
     }
 
     fn jr_z_n(&mut self, memory: &MMU) -> u32 {
@@ -743,7 +720,8 @@ impl CPU {
     }
 
     fn ld_l_n(&mut self, memory: &MMU) -> u32 {
-        self.ld_r_n(&mut self.l, self.fetch(memory))
+        let n = self.fetch(memory);
+        self.ld_r_n(5, n)
     }
 
     fn jr_nc_n(&mut self, memory: &MMU) -> u32 {
@@ -866,7 +844,10 @@ impl CPU {
     }
 
     fn ld_b_b(&mut self) -> u32 { 4 }
-    fn ld_b_c(&mut self) -> u32 { self.b = self.c; 4 }
+    fn ld_b_c(&mut self) -> u32 {
+        self.ld_r1_r2(0, 1); // 0 represents register B, 1 represents register C
+        4
+    }
     fn ld_b_d(&mut self) -> u32 { self.b = self.d; 4 }
     fn ld_b_e(&mut self) -> u32 { self.b = self.e; 4 }
     fn ld_b_h(&mut self) -> u32 { self.b = self.h; 4 }
@@ -894,7 +875,10 @@ impl CPU {
     fn ld_d_b(&mut self) -> u32 { self.d = self.b; 4 }
     fn ld_d_c(&mut self) -> u32 { self.d = self.c; 4 }
     fn ld_d_d(&mut self) -> u32 { 4 }
-    fn ld_d_e(&mut self) -> u32 { self.d = self.e; 4 }
+    fn ld_d_e(&mut self) -> u32 {
+        self.ld_r1_r2(2, 3); // 2 represents register D, 3 represents register E
+        4
+    }
     fn ld_d_h(&mut self) -> u32 { self.d = self.h; 4 }
     fn ld_d_l(&mut self) -> u32 { self.d = self.l; 4 }
     fn ld_d_hl(&mut self, memory: &MMU) -> u32 {
@@ -1093,7 +1077,6 @@ impl CPU {
         self.cp_a(value);
         8
     }
-    fn cp_a(&mut self) -> u32 { self.cp_a(self.a); 4 }
 
     fn ret_nz(&mut self, memory: &MMU) -> u32 {
         if !self.is_flag_set(ZERO_FLAG) {
@@ -1595,105 +1578,105 @@ impl CPU {
     fn execute_cb(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
         match opcode {
-            0x00..=0x07 => self.rlc_r(opcode & 0x07),
-            0x08..=0x0F => self.rrc_r(opcode & 0x07),
-            0x10..=0x17 => self.rl_r(opcode & 0x07),
-            0x18..=0x1F => self.rr_r(opcode & 0x07),
-            0x20..=0x27 => self.sla_r(opcode & 0x07),
-            0x28..=0x2F => self.sra_r(opcode & 0x07),
-            0x30..=0x37 => self.swap_r(opcode & 0x07),
-            0x38..=0x3F => self.srl_r(opcode & 0x07),
-            0x40..=0x7F => self.bit_b_r(opcode),
-            0x80..=0xBF => self.res_b_r(opcode),
-            0xC0..=0xFF => self.set_b_r(opcode),
+            0x00..=0x07 => self.rlc_r(opcode & 0x07, memory),
+            0x08..=0x0F => self.rrc_r(opcode & 0x07, memory),
+            0x10..=0x17 => self.rl_r(opcode & 0x07, memory),
+            0x18..=0x1F => self.rr_r(opcode & 0x07, memory),
+            0x20..=0x27 => self.sla_r(opcode & 0x07, memory),
+            0x28..=0x2F => self.sra_r(opcode & 0x07, memory),
+            0x30..=0x37 => self.swap_r(opcode & 0x07, memory),
+            0x38..=0x3F => self.srl_r(opcode & 0x07, memory),
+            0x40..=0x7F => self.bit_b_r(opcode, memory),
+            0x80..=0xBF => self.res_b_r(opcode, memory),
+            0xC0..=0xFF => self.set_b_r(opcode, memory),
         }
     }
 
-    fn rlc_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn rlc_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = (value << 1) | (value >> 7);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x80 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn rrc_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn rrc_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = (value >> 1) | (value << 7);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x01 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn rl_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn rl_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let old_carry = if self.is_flag_set(CARRY_FLAG) { 1 } else { 0 };
         let result = (value << 1) | old_carry;
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x80 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn rr_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn rr_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let old_carry = if self.is_flag_set(CARRY_FLAG) { 0x80 } else { 0 };
         let result = (value >> 1) | old_carry;
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x01 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn sla_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn sla_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = value << 1;
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x80 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn sra_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn sra_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = (value >> 1) | (value & 0x80);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x01 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn swap_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn swap_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = ((value & 0xF) << 4) | ((value & 0xF0) >> 4);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         8
     }
 
-    fn srl_r(&mut self, r: u8) -> u32 {
-        let value = self.get_r(r);
+    fn srl_r(&mut self, r: u8, memory: &mut MMU) -> u32 {
+        let value = self.get_r(r, memory);
         let result = value >> 1;
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         self.f = 0;
         if result == 0 { self.set_flag(ZERO_FLAG); }
         if value & 0x01 != 0 { self.set_flag(CARRY_FLAG); }
         8
     }
 
-    fn bit_b_r(&mut self, opcode: u8) -> u32 {
+    fn bit_b_r(&mut self, opcode: u8, memory: &MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = value & (1 << b);
         self.f &= !ZERO_FLAG;
         self.f |= HALF_CARRY_FLAG;
@@ -1702,21 +1685,21 @@ impl CPU {
         8
     }
 
-    fn res_b_r(&mut self, opcode: u8) -> u32 {
+    fn res_b_r(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = value & !(1 << b);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         8
     }
 
-    fn set_b_r(&mut self, opcode: u8) -> u32 {
+    fn set_b_r(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = value | (1 << b);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         8
     }
 
@@ -1759,7 +1742,7 @@ impl CPU {
 
         let ie = memory.read_byte(0xFFFF);
         let if_ = memory.read_byte(0xFF0F);
-        let interrupts = ie & if_;
+        let interrupts = ie & if_ & interrupts;
 
         if interrupts == 0 {
             return false;
@@ -1910,16 +1893,16 @@ impl CPU {
     fn prefix_cb(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
         match opcode {
-            0x00..=0x3F => self.rotate_shift(opcode),
-            0x40..=0x7F => self.bit(opcode),
-            0x80..=0xBF => self.res(opcode),
-            0xC0..=0xFF => self.set(opcode),
+            0x00..=0x3F => self.rotate_shift(opcode, memory),
+            0x40..=0x7F => self.bit(opcode, memory),
+            0x80..=0xBF => self.res(opcode, memory),
+            0xC0..=0xFF => self.set(opcode, memory),
         }
     }
 
-    fn rotate_shift(&mut self, opcode: u8) -> u32 {
+    fn rotate_shift(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = match opcode & 0xF8 {
             0x00 => self.rlc(value),
             0x08 => self.rrc(value),
@@ -1931,14 +1914,14 @@ impl CPU {
             0x38 => self.srl(value),
             _ => unreachable!(),
         };
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         8
     }
 
-    fn bit(&mut self, opcode: u8) -> u32 {
+    fn bit(&mut self, opcode: u8, memory: &MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         self.clear_flag(SUBTRACT_FLAG);
         self.set_flag(HALF_CARRY_FLAG);
         if value & (1 << b) == 0 {
@@ -1949,21 +1932,21 @@ impl CPU {
         8
     }
 
-    fn res(&mut self, opcode: u8) -> u32 {
+    fn res(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = value & !(1 << b);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         8
     }
 
-    fn set(&mut self, opcode: u8) -> u32 {
+    fn set(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
         let b = (opcode >> 3) & 0x07;
         let r = opcode & 0x07;
-        let value = self.get_r(r);
+        let value = self.get_r(r, memory);
         let result = value | (1 << b);
-        self.set_r(r, result);
+        self.set_r(r, result, memory);
         8
     }
 
