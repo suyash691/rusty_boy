@@ -30,10 +30,29 @@ impl Gameboy {
     }
 
     fn run(&mut self) {
+        loop {
+            let cycles = self.cpu.step(&mut self.memory);
+            
+            // Update components
+            self.timer.update(cycles);
+            self.ppu.update(cycles);
+            
+            // Handle interrupts
+            let interrupts = self.interrupt_controller.get_interrupts();
+            if interrupts != 0 {
+                self.cpu.handle_interrupts(&mut self.memory, interrupts);
+            }
+
+            // Break condition (you might want to implement a proper exit condition)
+            if self.cpu.is_stopped() {
+                break;
+            }
+        }
     }
 }
 
 fn main() {
     let mut gameboy = Gameboy::new();
     gameboy.run();
+    println!("Emulation finished");
 }
