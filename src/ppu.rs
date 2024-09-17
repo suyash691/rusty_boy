@@ -12,7 +12,7 @@ pub struct PPU {
     obj_palette1: u8,      // Object Palette 1 Data register (0xFF49)
     window_y: u8,          // Window Y Position register (0xFF4A)
     window_x: u8,          // Window X Position minus 7 register (0xFF4B)
-    framebuffer: [u8; 160 * 144], // Stores the rendered frame (160x144 pixels)
+    pub framebuffer: [u8; 160 * 144], // Stores the rendered frame (160x144 pixels)
     mode_clock: u32,       // Tracks cycles within the current PPU mode
 }
 
