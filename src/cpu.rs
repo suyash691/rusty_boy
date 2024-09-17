@@ -240,7 +240,7 @@ impl CPU {
             0xAC => self.xor_h(),
             0xAD => self.xor_l(),
             0xAE => self.xor_hl(memory),
-            //0xAF => self.xor_a(),
+            0xAF => self.xor_a_self(),
             
             0xB0 => self.or_b(),
             0xB1 => self.or_c(),
@@ -1515,6 +1515,11 @@ impl CPU {
         self.a ^= n;
         self.f = 0;
         if self.a == 0 { self.set_flag(ZERO_FLAG); }
+    }
+
+    fn xor_a_self(&mut self) -> u32 {
+        self.xor_a(self.a);
+        4
     }
 
     fn or_a(&mut self, n: u8) {

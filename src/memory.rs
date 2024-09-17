@@ -69,7 +69,14 @@ impl MMU {
                     // Note: We can't check Z80._r.pc here, so this part is omitted
                     // You might want to handle this differently in your implementation
                 }
-                self.rom[addr as usize]
+                if (self.rom.len()> 0)
+                {
+                    self.rom[addr as usize]
+                }
+                else
+                {
+                    0
+                }
             }
             0x1000..=0x3000 => self.rom[addr as usize],
             0x4000..=0x7000 => self.rom[addr as usize],
