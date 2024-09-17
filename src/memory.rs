@@ -56,6 +56,7 @@ impl MMU {
         let mut file = File::open(filename)?;
         self.rom.clear();
         file.read_to_end(&mut self.rom)?;
+        println!("ROM loaded. Size: {} bytes", self.rom.len());
         Ok(())
     }
 
@@ -66,8 +67,9 @@ impl MMU {
                     if addr < 0x0100 {
                         return self.bios[addr as usize];
                     }
-                    // Note: We can't check Z80._r.pc here, so this part is omitted
-                    // You might want to handle this differently in your implementation
+                    else {
+                        println!("Switching from BIOS to ROM");
+                    }
                 }
                 if (self.rom.len()> 0)
                 {

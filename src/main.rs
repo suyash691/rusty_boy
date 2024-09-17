@@ -30,6 +30,7 @@ impl Gameboy {
     fn new(rom_path: &str) -> Result<Self, std::io::Error> {
         let mut memory = MMU::new();
         memory.load(rom_path)?;
+        println!("ROM loaded successfully");
 
         Ok(Gameboy {
             cpu: CPU::new(),
@@ -42,12 +43,11 @@ impl Gameboy {
 
     fn update(&mut self) {
         let cycles = self.cpu.step(&mut self.memory);
+        println!("CPU executed {} cycles", cycles);
 
-        // Update components
         self.timer.update(cycles);
         self.ppu.update(cycles);
 
-        // Handle interrupts
         let interrupts = self.interrupt_controller.get_interrupts();
         if interrupts != 0 {
             self.cpu.handle_interrupts(&mut self.memory, interrupts);
@@ -55,15 +55,7 @@ impl Gameboy {
     }
 
     fn get_frame_buffer(&self) -> Vec<u32> {
-        self.ppu.framebuffer.iter().map(|&color| {
-            match color {
-                0 => 0xFFFFFFFF, // White
-                1 => 0xC0C0C0FF, // Light gray
-                2 => 0x606060FF, // Dark gray
-                3 => 0x000000FF, // Black
-                _ => unreachable!(),
-            }
-        }).collect()
+        self.ppu.get_frame_buffer()
     }
 }
 
@@ -76,6 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rom_path = &args[1];
     let mut gameboy = Gameboy::new(rom_path)?;
+    println!("First ROM byte: 0x{:02X}", gameboy.memory.read_byte(0x0100));
+    println!("Nintendo logo byte: 0x{:02X}", gameboy.memory.read_byte(0x0104));
 
     let mut window = Window::new(
         "Rusty Boy",
@@ -86,11 +80,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     window.limit_update_rate(Some(Duration::from_micros(16600))); // ~60 fps
 
+    let mut frame_count = 0;
     while window.is_open() && !window.is_key_down(Key::Escape) {
         gameboy.update();
 
         let buffer: Vec<u32> = gameboy.get_frame_buffer();
         window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
+
+        frame_count += 1;
+        if frame_count % 60 == 0 {
+            println!("Rendered 60 frames");
+        }
     }
 
     Ok(())

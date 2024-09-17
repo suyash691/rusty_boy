@@ -44,7 +44,11 @@ impl CPU {
 
     pub fn step(&mut self, memory: &mut MMU) -> u32 {
         let opcode = self.fetch(memory);
-        self.execute(opcode, memory)
+        println!("Executing opcode: 0x{:02X} at PC: 0x{:04X}", opcode, self.pc);
+        let cycles = self.execute(opcode, memory);
+        println!("After execution: A: 0x{:02X}, F: 0x{:02X}, BC: 0x{:04X}, DE: 0x{:04X}, HL: 0x{:04X}, SP: 0x{:04X}", 
+                 self.a, self.f, self.get_bc(), self.get_de(), self.get_hl(), self.sp);
+        cycles
     }
 
     fn fetch(&mut self, memory: &MMU) -> u8 {
@@ -54,7 +58,7 @@ impl CPU {
     }
 
     fn execute(&mut self, opcode: u8, memory: &mut MMU) -> u32 {
-        match opcode {
+        let cycles = match opcode {
             0x00 => self.nop(),
             0x01 => self.ld_bc_nn(memory),
             0x02 => self.ld_bc_a(memory),
@@ -89,7 +93,9 @@ impl CPU {
             0x1E => self.ld_e_n(memory),
             0x1F => self.rra(),
             
-            0x20 => self.jr_nz_n(memory),
+            0x20 => {
+                println!("Executing JR NZ,r8 at PC: 0x{:04X}, ZF: {}", self.pc, self.is_flag_set(ZERO_FLAG));
+                self.jr_nz_n(memory)},
             0x21 => self.ld_hl_nn(memory),
             0x22 => self.ld_hl_a(memory),
             0x23 => self.inc_hl(),
@@ -186,7 +192,7 @@ impl CPU {
             0x79 => self.ld_a_c(),
             0x7A => self.ld_a_d(),
             0x7B => self.ld_a_e(),
-            0x7C => self.ld_a_h(),
+            0x7C => self.bit_7_h(),
             0x7D => self.ld_a_l(),
             0x7E => self.ld_a_hl(memory),
             0x7F => self.ld_a_a(),
@@ -270,7 +276,9 @@ impl CPU {
             0xC8 => self.ret_z(memory),
             0xC9 => self.ret(memory),
             0xCA => self.jp_z_nn(memory),
-            0xCB => self.prefix_cb(memory),
+            0xCB => {
+                self.execute_cb(memory)
+            },
             0xCC => self.call_z_nn(memory),
             0xCD => self.call_nn(memory),
             0xCE => self.adc_a_n(memory),
@@ -328,7 +336,9 @@ impl CPU {
             0xFF => self.rst_38h(memory),
             
             _ => panic!("Unimplemented opcode: 0x{:02X}", opcode),
-        }
+        };
+        println!("After execution: A: 0x{:02X}, F: 0x{:02X}, BC: 0x{:04X}, DE: 0x{:04X}, HL: 0x{:04X}, SP: 0x{:04X}", self.a, self.f, self.get_bc(), self.get_de(), self.get_hl(), self.sp);
+        cycles
     }
 
     // Helper functions for flag operations
@@ -342,6 +352,22 @@ impl CPU {
 
     fn is_flag_set(&self, flag: u8) -> bool {
         self.f & flag != 0
+    }
+
+    fn bit_7_h(&mut self) -> u32 {
+        let result = self.h & (1 << 7);
+        if result == 0
+        {
+            self.set_flag(ZERO_FLAG);
+        }
+        else
+        {
+            self.clear_flag(ZERO_FLAG);
+        }
+        
+        self.clear_flag(SUBTRACT_FLAG);
+        self.set_flag(HALF_CARRY_FLAG);
+        8
     }
 
     // 8-bit load instructions
@@ -618,6 +644,7 @@ impl CPU {
             self.pc = self.pc.wrapping_add(n as u16);
             12
         } else {
+            self.pc = self.pc.wrapping_add(1); // Important: still need to move past the operand
             8
         }
     }
@@ -742,12 +769,11 @@ impl CPU {
     }
 
     fn ld_hl_dec_a(&mut self, memory: &mut MMU) -> u32 {
-        let address = u16::from_le_bytes([self.l, self.h]);
+        let address = self.get_hl();
         memory.write_byte(address, self.a);
-        let new_hl = address.wrapping_sub(1);
-        let [l, h] = new_hl.to_le_bytes();
-        self.h = h;
-        self.l = l;
+        let new_hl = self.get_hl().wrapping_sub(1);
+        self.set_hl(new_hl);
+        println!("LD (HL-),A: Wrote 0x{:02X} to address 0x{:04X}, HL is now 0x{:04X}", self.a, address, new_hl);
         8
     }
 
@@ -1581,19 +1607,20 @@ impl CPU {
     // CB-prefixed instructions
 
     fn execute_cb(&mut self, memory: &mut MMU) -> u32 {
-        let opcode = self.fetch(memory);
-        match opcode {
-            0x00..=0x07 => self.rlc_r(opcode & 0x07, memory),
-            0x08..=0x0F => self.rrc_r(opcode & 0x07, memory),
-            0x10..=0x17 => self.rl_r(opcode & 0x07, memory),
-            0x18..=0x1F => self.rr_r(opcode & 0x07, memory),
-            0x20..=0x27 => self.sla_r(opcode & 0x07, memory),
-            0x28..=0x2F => self.sra_r(opcode & 0x07, memory),
-            0x30..=0x37 => self.swap_r(opcode & 0x07, memory),
-            0x38..=0x3F => self.srl_r(opcode & 0x07, memory),
-            0x40..=0x7F => self.bit_b_r(opcode, memory),
-            0x80..=0xBF => self.res_b_r(opcode, memory),
-            0xC0..=0xFF => self.set_b_r(opcode, memory),
+        let cb_opcode = self.fetch(memory);
+        println!("Executing CB-prefixed opcode: 0x{:02X} at PC: 0x{:04X}", cb_opcode, self.pc);
+        match cb_opcode {
+            0x00..=0x07 => self.rlc_r(cb_opcode & 0x07, memory),
+            0x08..=0x0F => self.rrc_r(cb_opcode & 0x07, memory),
+            0x10..=0x17 => self.rl_r(cb_opcode & 0x07, memory),
+            0x18..=0x1F => self.rr_r(cb_opcode & 0x07, memory),
+            0x20..=0x27 => self.sla_r(cb_opcode & 0x07, memory),
+            0x28..=0x2F => self.sra_r(cb_opcode & 0x07, memory),
+            0x30..=0x37 => self.swap_r(cb_opcode & 0x07, memory),
+            0x38..=0x3F => self.srl_r(cb_opcode & 0x07, memory),
+            0x40..=0x7F => self.bit_b_r(cb_opcode, memory),
+            0x80..=0xBF => self.res_b_r(cb_opcode, memory),
+            0xC0..=0xFF => self.set_b_r(cb_opcode, memory),
         }
     }
 
@@ -1744,27 +1771,24 @@ impl CPU {
         if !self.ime {
             return false;
         }
-
+    
         let ie = memory.read_byte(0xFFFF);
         let if_ = memory.read_byte(0xFF0F);
         let interrupts = ie & if_ & interrupts;
-
+    
         if interrupts == 0 {
             return false;
         }
-
+    
+        println!("Handling interrupts: 0x{:02X}", interrupts);
+    
         self.ime = false;
         self.halt = false;
-
+    
         for i in 0..5 {
             if interrupts & (1 << i) != 0 {
-                // Clear the interrupt flag
                 memory.write_byte(0xFF0F, if_ & !(1 << i));
-
-                // Push the current PC onto the stack
                 self.push_stack(memory, self.pc);
-
-                // Jump to the interrupt vector
                 self.pc = match i {
                     0 => 0x0040, // V-Blank
                     1 => 0x0048, // LCD STAT
@@ -1773,11 +1797,11 @@ impl CPU {
                     4 => 0x0060, // Joypad
                     _ => unreachable!(),
                 };
-
+                println!("Servicing interrupt {}, jumping to 0x{:04X}", i, self.pc);
                 return true;
             }
         }
-
+    
         false
     }
 

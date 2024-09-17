@@ -18,6 +18,7 @@ impl Timer {
     }
 
     pub fn update(&mut self, cycles: u32) {
+        println!("Updating timer. Cycles: {}", cycles);
         for _ in 0..cycles {
             self.tick();
         }
