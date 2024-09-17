@@ -1,11 +1,6 @@
-use pixels::{Pixels, SurfaceTexture};
-use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::keyboard::KeyCode;
-use winit::window::WindowBuilder;
-use winit_input_helper::WinitInputHelper;
+use minifb::{Key, Window, WindowOptions};
 use std::env;
+use std::time::Duration;
 
 mod cpu;
 mod ppu;
@@ -19,9 +14,9 @@ use ppu::PPU;
 use timer::Timer;
 use interrupts::InterruptController;
 
-const WIDTH: u32 = 160;
-const HEIGHT: u32 = 144;
-const SCALE: u32 = 3;
+const WIDTH: usize = 160;
+const HEIGHT: usize = 144;
+const SCALE: usize = 3;
 
 struct Gameboy {
     cpu: CPU,
@@ -59,22 +54,16 @@ impl Gameboy {
         }
     }
 
-    fn draw(&self, frame: &mut [u8]) {
-        for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
-            let x = i % WIDTH as usize;
-            let y = i / WIDTH as usize;
-            let color = self.ppu.framebuffer[y * WIDTH as usize + x];
-
-            let rgba = match color {
-                0 => [255, 255, 255, 255], // White
-                1 => [192, 192, 192, 255], // Light gray
-                2 => [96, 96, 96, 255],    // Dark gray
-                3 => [0, 0, 0, 255],       // Black
+    fn get_frame_buffer(&self) -> Vec<u32> {
+        self.ppu.framebuffer.iter().map(|&color| {
+            match color {
+                0 => 0xFFFFFFFF, // White
+                1 => 0xC0C0C0FF, // Light gray
+                2 => 0x606060FF, // Dark gray
+                3 => 0x000000FF, // Black
                 _ => unreachable!(),
-            };
-
-            pixel.copy_from_slice(&rgba);
-        }
+            }
+        }).collect()
     }
 }
 
@@ -88,45 +77,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rom_path = &args[1];
     let mut gameboy = Gameboy::new(rom_path)?;
 
-    let event_loop = EventLoop::new();
-    let mut input = WinitInputHelper::new();
-    let window = WindowBuilder::new()
-        .with_title("Rusty Boy")
-        .with_inner_size(LogicalSize::new(WIDTH * SCALE, HEIGHT * SCALE))
-        .build(&event_loop)?;
+    let mut window = Window::new(
+        "Rusty Boy",
+        WIDTH * SCALE,
+        HEIGHT * SCALE,
+        WindowOptions::default(),
+    )?;
 
-    let mut pixels = {
-        let window_size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(WIDTH, HEIGHT, surface_texture)?
-    };
+    window.limit_update_rate(Some(Duration::from_micros(16600))); // ~60 fps
 
-    event_loop.run(move |event, _, control_flow| {
-        // Draw the current frame
-        if let Event::RedrawRequested(_) = event {
-            gameboy.draw(pixels.get_frame());
-            if pixels.render().is_err() {
-                *control_flow = ControlFlow::Exit;
-                return;
-            }
-        }
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        gameboy.update();
 
-        // Handle input events
-        if input.update(&event) {
-            // Close events
-            if input.key_pressed(KeyCode::Escape) || input.close_requested() {
-                *control_flow = ControlFlow::Exit;
-                return;
-            }
+        let buffer: Vec<u32> = gameboy.get_frame_buffer();
+        window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
+    }
 
-            // Resize the window
-            if let Some(size) = input.window_resized() {
-                pixels.resize_surface(size.width, size.height);
-            }
-
-            // Update internal state and request a redraw
-            gameboy.update();
-            window.request_redraw();
-        }
-    });
+    Ok(())
 }
