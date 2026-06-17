@@ -1,3 +1,7 @@
 /target
 .claudesync/config.local.json
 out.txt
+/roms/
+*.gb
+*.gbc
+*.ppm
