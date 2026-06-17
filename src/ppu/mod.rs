@@ -65,6 +65,10 @@ pub struct PPU {
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
 const PHASES_PER_LINE: i64 = 912;
 const PHASES_PER_FRAME: i64 = 154 * PHASES_PER_LINE;
+/// Boot-handoff seed for `phase_lcd`: late in VBlank line 153, so LY reads 0
+/// (early-zero) and STAT shows mode 1 (the poweron_* residue), then wraps into a
+/// normal line 0 with OAM at the documented offset. Tuned against gbmicrotest poweron_*.
+const BOOT_PHASE: i64 = 153 * PHASES_PER_LINE + 800;
 
 impl PPU {
     pub fn new() -> Self {
@@ -89,6 +93,21 @@ impl PPU {
             mode3_dot: 0,
             mode3_done: false,
         }
+    }
+
+    /// Seed the PPU to the DMG boot-ROM handoff phase. The boot ROM ran the LCD ~60
+    /// frames and hands off mid-frame: `poweron_*` anchors with LY reading 0 while the
+    /// PPU is physically in late VBlank (line 153, early-zero → mode 1 residue), which
+    /// then wraps into a NORMAL line 0 (mode 2 OAM). Distinct from the software enable
+    /// quirk; called by apply_post_boot_state AFTER the LCDC write.
+    pub fn boot_init(&mut self) {
+        self.phase_lcd = BOOT_PHASE;
+        self.ly = 153;
+        self.ly_153_early_zero = true;
+        self.current_mode = 1;
+        self.lcd_status = (self.lcd_status & 0xFC) | 1;
+        self.rendering = false;
+        self.mode3_done = false;
     }
 
     pub fn update(&mut self, cycles: u32) {

@@ -51,6 +51,9 @@ pub fn apply_post_boot_state(mmu: &mut MMU) -> CPU {
     mmu.serial_control = 0x7E;
     mmu.joypad.select = 0x00; // No button/dpad selection → P1 reads 0xCF
     mmu.timer.set_div(0xABCC);
+    // Boot ROM handoff: seed the PPU to the mid-frame boot phase (NOT the software
+    // enable-quirk the 0xFF40=0x91 write above triggered). poweron_* anchors here.
+    mmu.ppu.boot_init();
     cpu
 }
 
