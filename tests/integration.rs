@@ -301,6 +301,26 @@ const GBMICROTEST_BASELINE: usize = 281;
 }
 
 #[test]
+#[ignore] // diagnostic: cargo test --release -- --include-ignored trace_boot --nocapture
+fn trace_boot() {
+    // What PPU phase/mode does a freshly-init'd machine start at, dot by dot?
+    // poweron_stat_000 expects (M-cyc): 0-5 mode1, 6 mode0, 7 mode2(OAM), 27 mode3.
+    let d = ensure_test_roms();
+    let rom = d.join("gbmicrotest/poweron_stat_000.gb");
+    if !rom.exists() { return; }
+    let (mut cpu, mut mmu) = rusty_boy::init_dmg(rom.to_str().unwrap());
+    let _ = &mut cpu;
+    eprintln!("\n=== boot PPU trace: dot, LY, mode (expect mode1 then mode0@~24dot then mode2) ===");
+    let mut last = (9u8, 9u8);
+    for dot in 0..120 {
+        let m = mmu.ppu.debug_mode();
+        let ly = mmu.ppu.debug_ly();
+        if (ly, m) != last { eprintln!("  dot {:3}: LY={} mode={}", dot, ly, m); last = (ly, m); }
+        mmu.ppu.update(1);
+    }
+}
+
+#[test]
 #[ignore] // diagnostic: cargo test --release -- --include-ignored measure_modes --nocapture
 fn measure_modes() {
     // Measure mode-2/3/0 durations on a steady-state line. Expected: 80 / 172 / 204.
