@@ -647,7 +647,7 @@ mod tests {
         // Now measure: set up PPU at start of mode 2, count dots until mode 0
         mmu.ppu.scroll_x = 0;
         mmu.ppu.current_mode = 2;
-        mmu.ppu.mode_clock = 0;
+        mmu.ppu.phase_lcd = 0;
         let mut dots = 0u32;
         loop {
             mmu.ppu.update(1);
@@ -659,7 +659,7 @@ mod tests {
 
         mmu.ppu.scroll_x = 4;
         mmu.ppu.current_mode = 2;
-        mmu.ppu.mode_clock = 0;
+        mmu.ppu.phase_lcd = 0;
         dots = 0;
         loop {
             mmu.ppu.update(1);
@@ -1189,9 +1189,9 @@ mod tests {
         for _ in 0..100_000u32 { cpu.handle_interrupts(&mut mmu); cpu.step(&mut mmu); }
         // Record when LY changes
         let start_ly = mmu.ppu.ly;
-        let start_clock = mmu.ppu.mode_clock;
+        let start_clock = (mmu.ppu.phase_lcd % 912 / 2) as u32;
         let start_mode = mmu.ppu.current_mode;
-        println!("At check: LY={} mode={} mode_clock={}", start_ly, start_mode, start_clock);
+        println!("At check: LY={} mode={} line_dot={}", start_ly, start_mode, start_clock);
     }
 
     #[test]
@@ -1204,7 +1204,7 @@ mod tests {
         for _ in 0..50_000u32 { cpu.handle_interrupts(&mut mmu); cpu.step(&mut mmu); }
         // Now find a mode 2 start (bounded so a phase mismatch can't spin forever)
         let mut guard = 0u32;
-        while mmu.ppu.current_mode != 2 || mmu.ppu.mode_clock > 4 {
+        while mmu.ppu.current_mode != 2 || (mmu.ppu.phase_lcd % 912 / 2) > 4 {
             cpu.handle_interrupts(&mut mmu); cpu.step(&mut mmu);
             guard += 1;
             if guard > 100_000 { return; }
@@ -1215,8 +1215,8 @@ mod tests {
         for dot in 0..460u32 {
             mmu.ppu.update(1);
             if mmu.ppu.current_mode == 0 && mode3_end == 0 {
-                mode3_end = dot + mmu.ppu.mode_clock - 1;
-                println!("LY={}: mode 3 ended at dot {} (mode_clock={})", line, dot, mmu.ppu.mode_clock);
+                mode3_end = dot + (mmu.ppu.phase_lcd % 912 / 2) as u32 - 1;
+                println!("LY={}: mode 3 ended at dot {} (phase_lcd={})", line, dot, mmu.ppu.phase_lcd);
                 break;
             }
         }

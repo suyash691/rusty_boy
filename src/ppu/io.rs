@@ -20,23 +20,22 @@ impl PPU {
                 let now_on = value & 0x80 != 0;
                 self.lcd_control = value;
                 if was_on && !now_on {
-                    // LCD turned off: blank, reset the scanline counter and mode.
-                    // STAT mode reads 0 while off; LY reads 0.
+                    // LCD turned off: blank, freeze the phase counter, mode reads 0.
                     self.ly = 0;
-                    self.mode_clock = 0;
+                    self.phase_lcd = 0;
+                    self.rendering = false;
                     self.current_mode = 0;
                     self.lcd_status &= 0xFC;
                     self.window_line = 0;
                     self.window_triggered = false;
                     self.stat_line = false;
                 } else if !was_on && now_on {
-                    // LCD turned on: restart at the top of frame in mode 2 (OAM scan).
-                    // The first scanline uses a shorter mode 2 (see FIRST_LINE_MODE2_LEN)
-                    // so HBlank arrives early, but still spans 456 dots so line 1+ are
-                    // unaffected — this re-converges and leaves steady-state timing intact.
+                    // LCD turned on: restart the frame at the top in mode 2. The MetroBoy
+                    // enable-glitch (phase_lcd jumps to 8 / line-0 is special) is layered
+                    // in at step 3d; for now begin a normal frame so steady state matches.
                     self.ly = 0;
-                    self.mode_clock = 0;
-                    self.first_line_after_on = true;
+                    self.phase_lcd = 0;
+                    self.rendering = false;
                     self.set_mode(2);
                     self.check_lyc();
                     self.update_stat_line();

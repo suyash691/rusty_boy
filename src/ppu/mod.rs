@@ -22,7 +22,6 @@ pub struct PPU {
     pub(crate) window_y: u8,
     pub(crate) window_x: u8,
     pub(crate) framebuffer: [u8; 160 * 144],
-    pub(crate) mode_clock: u32,
     pub(crate) current_mode: u8,
     pub vblank_interrupt: bool,
     pub stat_interrupt: bool,
@@ -45,15 +44,23 @@ pub struct PPU {
     pub(crate) obj_cram_auto_inc: bool,
     pub cgb_mode: bool,
     pub(crate) ly_153_early_zero: bool,
-    /// First scanline after LCD-on: its mode 2 (OAM) is shorter than normal, so
-    /// HBlank arrives early — but the line still spans 456 dots (mode 0 absorbs the
-    /// difference), so line 1+ start on time and steady-state timing is unaffected.
-    pub(crate) first_line_after_on: bool,
+    /// Free-running LCD phase counter (MetroBoy mechanism — see
+    /// rusty-boy-ppu-metroboy-port memory + docs/dmg-spec.md). Unit: MetroBoy "phases",
+    /// 2 phases = 1 dot, 912 phases = 1 line. Pinned to 0 while the LCD is off; on
+    /// software enable it restarts at phase 8 (the "PPU late by 1 M-cycle" glitch). LY,
+    /// LX, mode boundaries, vblank, and the LY=153 early-zero are all DERIVED from it,
+    /// so no magic constants are needed.
+    pub(crate) phase_lcd: i64,
+    /// Set true when mode 3 is entered (rendering) on the current line; cleared at line
+    /// end. Drives the FIFO-based pixel transfer that determines mode-3 length.
+    pub(crate) rendering: bool,
+    /// Dots elapsed since mode 3 began this line (fetcher warm-up gate).
+    pub(crate) mode3_dot: i32,
 }
 
-/// On the first scanline after LCD-on, mode 2 ends this many dots earlier than the
-/// usual 80, shifting HBlank earlier without changing the 456-dot line length.
-pub(crate) const FIRST_LINE_MODE2_LEN: u32 = 77;
+/// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
+const PHASES_PER_LINE: i64 = 912;
+const PHASES_PER_FRAME: i64 = 154 * PHASES_PER_LINE;
 
 impl PPU {
     pub fn new() -> Self {
@@ -62,7 +69,7 @@ impl PPU {
             lcd_control: 0, lcd_status: 0, scroll_y: 0, scroll_x: 0,
             ly: 0, ly_compare: 0, bg_palette: 0, obj_palette0: 0, obj_palette1: 0,
             window_y: 0, window_x: 0,
-            framebuffer: [0; 160 * 144], mode_clock: 0, current_mode: 2,
+            framebuffer: [0; 160 * 144], current_mode: 2,
             vblank_interrupt: false, stat_interrupt: false, stat_line: false, hblank_entered: false,
             dma_active: false, dma_source: 0, dma_offset: 0, dma_delay: 0,
             window_line: 0, window_triggered: false,
@@ -73,91 +80,98 @@ impl PPU {
             obj_cram_index: 0, obj_cram_auto_inc: false,
             cgb_mode: false,
             ly_153_early_zero: false,
-            first_line_after_on: false,
+            phase_lcd: 0,
+            rendering: false,
+            mode3_dot: 0,
         }
     }
 
     pub fn update(&mut self, cycles: u32) {
         if !self.is_lcd_enabled() { return; }
-
-        match self.current_mode {
-            2 => {
-                self.mode_clock += cycles;
-                // First line after LCD-on uses a shorter mode 2 so HBlank comes early;
-                // the line still totals 456 dots, so steady state is unaffected.
-                let mode2_len = if self.first_line_after_on { FIRST_LINE_MODE2_LEN } else { 80 };
-                if self.mode_clock >= mode2_len {
-                    self.oam_scan();
-                    self.fifo.reset(self.scroll_x);
-                    if self.lcd_control & 0x20 != 0 && !self.window_triggered && self.ly == self.window_y {
-                        self.window_triggered = true;
-                    }
-                    self.set_mode(3);
-                }
-            }
-            3 => {
-                // Mode 3's first 4 dots are setup (fetcher idle). The gate is relative
-                // to when mode 3 began (mode-2 length + 4), so it stays correct when the
-                // first line uses a shorter mode 2.
-                let mode2_len = if self.first_line_after_on { FIRST_LINE_MODE2_LEN } else { 80 };
-                let setup_end = mode2_len + 4;
-                for _ in 0..cycles {
-                    self.mode_clock += 1;
-                    if self.mode_clock <= setup_end { continue; }
-                    if self.tick_pixel_transfer() {
-                        if self.fifo.window_fetching { self.window_line += 1; }
-                        self.set_mode(0);
-                        self.update_stat_line();
-                        break;
-                    }
-                }
-            }
-            0 => {
-                self.mode_clock += cycles;
-                if self.mode_clock >= 456 {
-                    self.mode_clock -= 456;
-                    self.ly += 1;
-                    // Line 0 has ended; subsequent lines use normal mode-2 length.
-                    self.first_line_after_on = false;
-                    if self.ly == 144 {
-                        self.set_mode(1);
-                        self.vblank_interrupt = true;
-                        // VBlank also triggers Mode 2 OAM STAT source (hardware quirk)
-                        self.check_vblank_stat();
-                        self.window_line = 0;
-                    } else {
-                        self.set_mode(2);
-                        self.check_lyc();
-                        self.update_stat_line();
-                    }
-                }
-            }
-            1 => {
-                self.mode_clock += cycles;
-                if self.mode_clock >= 456 {
-                    self.mode_clock -= 456;
-                    self.ly += 1;
-                    if self.ly > 153 {
-                        self.ly = 0;
-                        self.set_mode(2);
-                        self.check_lyc();
-                        self.update_stat_line();
-                        self.window_triggered = false;
-                    } else if self.ly == 153 {
-                        // Line 153: LY reads as 153 for ~4 dots, then becomes 0
-                        // We handle this by setting ly_153_early_zero after a short delay
-                        self.ly_153_early_zero = false;
-                        self.check_lyc();
-                    } else {
-                        self.check_lyc();
-                    }
-                } else if self.ly == 153 && !self.ly_153_early_zero && self.mode_clock >= 4 {
-                    // After 4 dots on line 153, LY reads as 0
-                    self.ly_153_early_zero = true;
-                    self.check_lyc(); // Re-evaluate with effective LY=0
-                }
-            }
-            _ => unreachable!(),
+        // The clock delivers one dot per call; loop defensively for cycles > 1.
+        for _ in 0..cycles {
+            self.tick_dot();
         }
+    }
+
+    /// Advance the PPU by one dot using the phase-derived MetroBoy model: LY, the
+    /// mode-2/mode-3 boundary, VBlank, and the LY=153 early-zero are all functions of
+    /// the free-running `phase_lcd` counter (2 phases/dot). Mode-3 length is driven by
+    /// the pixel FIFO (`tick_pixel_transfer`), which is the emergent "pix_count==167".
+    fn tick_dot(&mut self) {
+        // Advance 2 phases per dot, wrapping at the frame boundary.
+        self.phase_lcd += 2;
+        if self.phase_lcd >= PHASES_PER_FRAME { self.phase_lcd -= PHASES_PER_FRAME; }
+
+        let lx = (self.phase_lcd % PHASES_PER_LINE) as i32; // 0..911 (even on dot ticks)
+        let new_ly = (self.phase_lcd / PHASES_PER_LINE) as u8; // 0..153
+        let first_line = self.phase_lcd < PHASES_PER_LINE;
+
+        // LY edge: a new scanline began.
+        if new_ly != self.ly {
+            self.ly = new_ly;
+            if self.ly == 144 {
+                // Entered VBlank.
+                self.set_mode(1);
+                self.vblank_interrupt = true;
+                self.check_vblank_stat(); // VBlank entry also evaluates the mode-2 OAM source.
+                self.window_line = 0;
+                self.window_triggered = false;
+                self.ly_153_early_zero = false;
+            } else if self.ly < 144 {
+                // Start of a visible line — mode 2 (OAM scan).
+                self.set_mode(2);
+                self.rendering = false;
+                self.check_lyc();
+                self.update_stat_line();
+            } else {
+                // A VBlank line (145..153).
+                if self.ly == 153 { self.ly_153_early_zero = false; }
+                self.check_lyc();
+            }
+        }
+
+        // LY=153 early-zero: LY reads 0 once we pass phase 153*912 + 4.
+        if self.ly == 153 && !self.ly_153_early_zero
+            && self.phase_lcd >= 153 * PHASES_PER_LINE + 4
+        {
+            self.ly_153_early_zero = true;
+            self.check_lyc(); // Re-evaluate LYC with effective LY=0.
+        }
+
+        // Visible-line rendering: mode 2 → mode 3 at the scan-done boundary, then the
+        // FIFO drives pixel transfer until it signals mode-3 end (→ mode 0).
+        if self.ly < 144 {
+            // Mode 2 (OAM scan) spans 80 dots. MetroBoy's besu_scan_donen window is
+            // lx in [2,162) (phases); our line tick starts at lx=0, so the equivalent
+            // 80-dot mode 2 ends at lx>=160 (= dot 80). First line after enable is +4
+            // phases (handled fully in step 3d).
+            let scan_done_lx = if first_line { 164 } else { 160 };
+            if !self.rendering && self.current_mode == 2 && lx >= scan_done_lx {
+                self.enter_mode3();
+            } else if self.rendering && self.current_mode == 3 {
+                // Mode 3's first 4 dots are fetcher warm-up (no pixel output yet); our
+                // FIFO models the rest. mode3_dot counts dots since rendering began.
+                self.mode3_dot += 1;
+                if self.mode3_dot > 4 && self.tick_pixel_transfer() {
+                    if self.fifo.window_fetching { self.window_line += 1; }
+                    self.rendering = false;
+                    self.set_mode(0);
+                    self.update_stat_line();
+                }
+            }
+        }
+    }
+
+    /// Enter mode 3 (rendering): OAM scan, FIFO reset, window-trigger latch.
+    fn enter_mode3(&mut self) {
+        self.oam_scan();
+        self.fifo.reset(self.scroll_x);
+        if self.lcd_control & 0x20 != 0 && !self.window_triggered && self.ly == self.window_y {
+            self.window_triggered = true;
+        }
+        self.rendering = true;
+        self.mode3_dot = 0;
+        self.set_mode(3);
     }
 }
