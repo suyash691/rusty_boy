@@ -60,6 +60,12 @@ pub struct PPU {
     /// renders at most once — needed because the enable line's pre-mode3 mode (0) equals
     /// its post-mode3 HBlank mode.
     pub(crate) mode3_done: bool,
+    /// True only on the first scanline after a genuine *software* LCD enable (off→on):
+    /// that line has NO mode 2 (starts in mode 0 → straight to mode 3). It is NOT set at
+    /// boot — the boot handoff (see `boot_init`) produces a NORMAL line 0 with mode 2,
+    /// just preceded by a VBlank residue. Distinguishing the two is essential: both land
+    /// at `phase_lcd < 912`, so a phase-derived `first_line` guess conflates them.
+    pub(crate) enable_quirk: bool,
 }
 
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
@@ -92,6 +98,7 @@ impl PPU {
             rendering: false,
             mode3_dot: 0,
             mode3_done: false,
+            enable_quirk: false,
         }
     }
 
@@ -108,6 +115,7 @@ impl PPU {
         self.lcd_status = (self.lcd_status & 0xFC) | 1;
         self.rendering = false;
         self.mode3_done = false;
+        self.enable_quirk = false; // boot line 0 is a NORMAL line (has mode 2), not the quirk
     }
 
     pub fn update(&mut self, cycles: u32) {
@@ -129,10 +137,12 @@ impl PPU {
 
         let lx = (self.phase_lcd % PHASES_PER_LINE) as i32; // 0..911 (even on dot ticks)
         let new_ly = (self.phase_lcd / PHASES_PER_LINE) as u8; // 0..153
-        let first_line = self.phase_lcd < PHASES_PER_LINE;
 
         // LY edge: a new scanline began.
         if new_ly != self.ly {
+            // The software-enable quirk applies only to its own line 0; once we leave
+            // line 0 (or reach VBlank) it's a normal line again.
+            if new_ly != 0 { self.enable_quirk = false; }
             self.ly = new_ly;
             self.mode3_done = false; // mode 3 happens at most once per line
             if self.ly == 144 {
@@ -171,12 +181,12 @@ impl PPU {
             // lx in [2,162) (phases); our line tick starts at lx=0, so the equivalent
             // 80-dot mode 2 ends at lx>=160 (= dot 80). The first line after enable has
             // NO mode 2 — it starts in mode 0 and scan_done is +4 phases later (lx>=164).
-            let scan_done_lx = if first_line { 164 } else { 160 };
-            // Normal line enters mode 3 from mode 2; the first line after enable enters
-            // from mode 0 (it has no mode 2). `mode3_done` ensures it happens once per
-            // line — without it, the first line (whose pre-mode3 mode is 0, same as the
-            // post-mode3 HBlank) would re-enter mode 3 repeatedly.
-            let pre_mode3 = if first_line { self.current_mode == 0 } else { self.current_mode == 2 };
+            let scan_done_lx = if self.enable_quirk { 164 } else { 160 };
+            // Normal line enters mode 3 from mode 2; the software-enable quirk line enters
+            // from mode 0 (no mode 2). `mode3_done` ensures it happens once per line —
+            // without it, the quirk line (whose pre-mode3 mode is 0, same as the post-mode3
+            // HBlank) would re-enter mode 3 repeatedly. The boot line 0 is NOT a quirk line.
+            let pre_mode3 = if self.enable_quirk { self.current_mode == 0 } else { self.current_mode == 2 };
             if !self.rendering && !self.mode3_done && pre_mode3 && lx >= scan_done_lx {
                 self.enter_mode3();
             } else if self.rendering && self.current_mode == 3 {
