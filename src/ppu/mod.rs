@@ -56,6 +56,10 @@ pub struct PPU {
     pub(crate) rendering: bool,
     /// Dots elapsed since mode 3 began this line (fetcher warm-up gate).
     pub(crate) mode3_dot: i32,
+    /// True once mode 3 has run on the current line (reset at each LY edge), so a line
+    /// renders at most once — needed because the enable line's pre-mode3 mode (0) equals
+    /// its post-mode3 HBlank mode.
+    pub(crate) mode3_done: bool,
 }
 
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
@@ -83,6 +87,7 @@ impl PPU {
             phase_lcd: 0,
             rendering: false,
             mode3_dot: 0,
+            mode3_done: false,
         }
     }
 
@@ -110,6 +115,7 @@ impl PPU {
         // LY edge: a new scanline began.
         if new_ly != self.ly {
             self.ly = new_ly;
+            self.mode3_done = false; // mode 3 happens at most once per line
             if self.ly == 144 {
                 // Entered VBlank.
                 self.set_mode(1);
@@ -148,9 +154,11 @@ impl PPU {
             // NO mode 2 — it starts in mode 0 and scan_done is +4 phases later (lx>=164).
             let scan_done_lx = if first_line { 164 } else { 160 };
             // Normal line enters mode 3 from mode 2; the first line after enable enters
-            // from mode 0 (it has no mode 2). Both only before rendering has begun.
+            // from mode 0 (it has no mode 2). `mode3_done` ensures it happens once per
+            // line — without it, the first line (whose pre-mode3 mode is 0, same as the
+            // post-mode3 HBlank) would re-enter mode 3 repeatedly.
             let pre_mode3 = if first_line { self.current_mode == 0 } else { self.current_mode == 2 };
-            if !self.rendering && pre_mode3 && lx >= scan_done_lx {
+            if !self.rendering && !self.mode3_done && pre_mode3 && lx >= scan_done_lx {
                 self.enter_mode3();
             } else if self.rendering && self.current_mode == 3 {
                 // Mode 3's first 4 dots are fetcher warm-up (no pixel output yet); our
@@ -159,6 +167,7 @@ impl PPU {
                 if self.mode3_dot > 4 && self.tick_pixel_transfer() {
                     if self.fifo.window_fetching { self.window_line += 1; }
                     self.rendering = false;
+                    self.mode3_done = true;
                     self.set_mode(0);
                     self.update_stat_line();
                 }

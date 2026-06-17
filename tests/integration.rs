@@ -322,6 +322,23 @@ fn measure_modes() {
     }
     eprintln!("\n=== mode runs (dots) — expect 2:80, 3:172, 0:204 ===");
     for (m, l) in &runs { eprintln!("  mode {} : {}", m, l); }
+
+    // Enable-line timeline: turn LCD off, then on, record mode runs on line 0.
+    // Expected (M-cyc): mode0 0..16, mode3 17..59, mode0 60.. (i.e. dots: mode0~68, mode3~172).
+    mmu.write_byte(0xFF40, 0x00); // LCD off
+    mmu.write_byte(0xFF40, 0x91); // LCD on -> enable line
+    let mut runs2: Vec<(u8, u32)> = Vec::new();
+    let mut cur = mmu.ppu.debug_mode();
+    let mut len = 0u32;
+    for _ in 0..600 {
+        let ly = mmu.ppu.debug_ly();
+        mmu.ppu.update(1);
+        let m = mmu.ppu.debug_mode();
+        if m == cur { len += 1; } else { runs2.push((cur, len)); cur = m; len = 1; }
+        if ly > 0 && runs2.len() > 4 { break; }
+    }
+    eprintln!("\n=== ENABLE-line mode runs (dots) — line 0 expect mode0~68, mode3~172, mode0~216 ===");
+    for (m, l) in &runs2 { eprintln!("  mode {} : {}", m, l); }
 }
 
 #[test]

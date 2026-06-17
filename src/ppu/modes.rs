@@ -45,7 +45,10 @@ impl PPU {
             return;
         }
         let lyc_match = self.lcd_status & 0x04 != 0 && self.lcd_status & 0x40 != 0;
-        let mode_0 = self.current_mode == 0 && self.lcd_status & 0x08 != 0;
+        // Mode-0 STAT asserts only on a REAL HBlank (after mode 3 completed this line),
+        // matching MetroBoy's WODU_HBLANK (pix_count==167) — NOT the enable line's
+        // leading mode 0, which precedes any rendering (`mode3_done` is false there).
+        let mode_0 = self.current_mode == 0 && self.mode3_done && self.lcd_status & 0x08 != 0;
         let mode_1 = self.current_mode == 1 && self.lcd_status & 0x10 != 0;
         let mode_2 = self.current_mode == 2 && self.lcd_status & 0x20 != 0;
 

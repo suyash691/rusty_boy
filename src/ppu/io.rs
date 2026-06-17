@@ -24,6 +24,7 @@ impl PPU {
                     self.ly = 0;
                     self.phase_lcd = 0;
                     self.rendering = false;
+                    self.mode3_done = false;
                     self.current_mode = 0;
                     self.lcd_status &= 0xFC;
                     self.window_line = 0;
@@ -37,6 +38,7 @@ impl PPU {
                     self.ly = 0;
                     self.phase_lcd = 8;
                     self.rendering = false;
+                    self.mode3_done = false;
                     self.current_mode = 0; // first_line begins in mode 0 (no OAM scan)
                     self.lcd_status = (self.lcd_status & 0xFC) | 0;
                     self.check_lyc();
