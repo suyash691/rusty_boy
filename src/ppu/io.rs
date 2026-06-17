@@ -30,13 +30,15 @@ impl PPU {
                     self.window_triggered = false;
                     self.stat_line = false;
                 } else if !was_on && now_on {
-                    // LCD turned on: restart the frame at the top in mode 2. The MetroBoy
-                    // enable-glitch (phase_lcd jumps to 8 / line-0 is special) is layered
-                    // in at step 3d; for now begin a normal frame so steady state matches.
+                    // LCD turned on: MetroBoy enable-glitch — the phase counter restarts at
+                    // phase 8 (= 4 dots / 1 M-cycle "late"), and line 0 is the `first_line`
+                    // with no mode 2 (it starts in mode 0 → straight to mode 3). All of this
+                    // falls out of phase_lcd=8 + the first_line branch in tick_dot.
                     self.ly = 0;
-                    self.phase_lcd = 0;
+                    self.phase_lcd = 8;
                     self.rendering = false;
-                    self.set_mode(2);
+                    self.current_mode = 0; // first_line begins in mode 0 (no OAM scan)
+                    self.lcd_status = (self.lcd_status & 0xFC) | 0;
                     self.check_lyc();
                     self.update_stat_line();
                 }

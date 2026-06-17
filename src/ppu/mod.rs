@@ -144,10 +144,13 @@ impl PPU {
         if self.ly < 144 {
             // Mode 2 (OAM scan) spans 80 dots. MetroBoy's besu_scan_donen window is
             // lx in [2,162) (phases); our line tick starts at lx=0, so the equivalent
-            // 80-dot mode 2 ends at lx>=160 (= dot 80). First line after enable is +4
-            // phases (handled fully in step 3d).
+            // 80-dot mode 2 ends at lx>=160 (= dot 80). The first line after enable has
+            // NO mode 2 — it starts in mode 0 and scan_done is +4 phases later (lx>=164).
             let scan_done_lx = if first_line { 164 } else { 160 };
-            if !self.rendering && self.current_mode == 2 && lx >= scan_done_lx {
+            // Normal line enters mode 3 from mode 2; the first line after enable enters
+            // from mode 0 (it has no mode 2). Both only before rendering has begun.
+            let pre_mode3 = if first_line { self.current_mode == 0 } else { self.current_mode == 2 };
+            if !self.rendering && pre_mode3 && lx >= scan_done_lx {
                 self.enter_mode3();
             } else if self.rendering && self.current_mode == 3 {
                 // Mode 3's first 4 dots are fetcher warm-up (no pixel output yet); our
