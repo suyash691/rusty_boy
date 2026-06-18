@@ -25,6 +25,11 @@ pub struct PPU {
     pub(crate) current_mode: u8,
     pub vblank_interrupt: bool,
     pub stat_interrupt: bool,
+    /// The `phase_lcd` at which a freshly-raised STAT edge becomes CPU-readable in IF.
+    /// PPU-timed edges (mode/LYC via `update_stat_line`) set this to `phase_lcd +
+    /// STAT_IF_DELAY` (the $FF0F read-latch); the FF41-write glitch sets it to `phase_lcd`
+    /// (immediate). Consumed by `collect_interrupts` when `stat_interrupt` is drained.
+    pub(crate) stat_publish_phase: i64,
     pub(crate) stat_line: bool,
     pub(crate) hblank_entered: bool,
     pub dma_active: bool,
@@ -95,6 +100,11 @@ pub struct PPU {
 /// samples — GateBoy `DELTA_BC` (the B→C edge, phase index 2).
 const LYC_SAMPLE_PHASE: i64 = 2;
 
+/// Delay (in phases) from a PPU-timed STAT edge being raised to it becoming CPU-readable
+/// in IF — the $FF0F read-latch (GateBoy MATY/MOPO). Measured = 8 phases (1 M-cycle / 4
+/// dots): a read at raise+6 must NOT see it, a read at raise+8 must. See zazzy plan STEP 0.
+const STAT_IF_DELAY: i64 = 8;
+
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
 const PHASES_PER_LINE: i64 = 912;
 const PHASES_PER_FRAME: i64 = 154 * PHASES_PER_LINE;
@@ -111,7 +121,7 @@ impl PPU {
             ly: 0, ly_compare: 0, bg_palette: 0, obj_palette0: 0, obj_palette1: 0,
             window_y: 0, window_x: 0,
             framebuffer: [0; 160 * 144], current_mode: 2,
-            vblank_interrupt: false, stat_interrupt: false, stat_line: false, hblank_entered: false,
+            vblank_interrupt: false, stat_interrupt: false, stat_publish_phase: 0, stat_line: false, hblank_entered: false,
             dma_active: false, dma_source: 0, dma_offset: 0, dma_delay: 0,
             window_line: 0, window_triggered: false,
             sprite_buffer: [(0, 0, 0, 0); 10], sprite_count: 0,

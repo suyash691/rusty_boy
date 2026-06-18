@@ -6,7 +6,7 @@ use std::io::Read;
 
 use crate::apu::APU;
 use crate::debugger::Debugger;
-use crate::interrupts::{InterruptController, LCD_STAT_INTERRUPT, TIMER_INTERRUPT, VBLANK_INTERRUPT};
+use crate::interrupts::{InterruptController, TIMER_INTERRUPT, VBLANK_INTERRUPT};
 use crate::ppu::PPU;
 use crate::timer::Timer;
 
@@ -155,6 +155,10 @@ impl MMU {
         let pre_phases = if self.double_speed { 2 } else { 6 };
         self.ppu.update(pre_phases);
 
+        // Commit any pending STAT edge whose publish phase has passed, so a $FF0F read in
+        // `access` sees the read-latched value as of its own (phase-exact) sample point.
+        self.interrupts.commit_stat_if(self.ppu.phase_lcd);
+
         // Bus access happens at the dot-3 boundary.
         let r = access(self);
 
@@ -172,7 +176,12 @@ impl MMU {
     /// Collect pending interrupts from subsystems into IF
     fn collect_interrupts(&mut self) {
         if self.ppu.vblank_interrupt { self.ppu.vblank_interrupt = false; self.interrupts.request(VBLANK_INTERRUPT); }
-        if self.ppu.stat_interrupt { self.ppu.stat_interrupt = false; self.interrupts.request(LCD_STAT_INTERRUPT); }
+        // STAT is dispatchable now but becomes CPU-readable in IF only at its publish phase
+        // (the $FF0F read-latch). Seed pending+publish-phase, then commit any pending STAT
+        // whose phase has passed (covers non-read M-cycles; the read path also commits at
+        // its access point in bus_cycle).
+        if self.ppu.stat_interrupt { self.ppu.stat_interrupt = false; self.interrupts.request_stat(self.ppu.stat_publish_phase); }
+        self.interrupts.commit_stat_if(self.ppu.phase_lcd);
         if self.timer.interrupt_requested { self.timer.interrupt_requested = false; self.interrupts.request(TIMER_INTERRUPT); }
         if self.joypad.interrupt_requested { self.joypad.interrupt_requested = false; self.interrupts.request(crate::interrupts::JOYPAD_INTERRUPT); }
     }

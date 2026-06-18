@@ -62,6 +62,9 @@ impl PPU {
         let glitch_high = lyc_match || mode_0 || mode_1 || mode_2;
         if glitch_high && !self.stat_line {
             self.stat_interrupt = true;
+            // The FF41-write glitch is a CPU-timed edge — readable immediately (no latch
+            // delay; its IF read is a later instruction). publish_phase = now.
+            self.stat_publish_phase = self.phase_lcd;
         }
     }
 
@@ -85,6 +88,11 @@ impl PPU {
         let new_line = lyc_match || mode_0 || mode_1 || mode_2;
         if new_line && !self.stat_line {
             self.stat_interrupt = true;
+            // PPU-timed edge: CPU-readable in IF only after the read-latch delay. Scoped to
+            // the mode-0 (HBlank/WODU) edge — the LYC source re-arms by level and is read
+            // immediately (lyc*_int_if_edge); applying the delay to it breaks that.
+            let delay = if mode_0 && !lyc_match { super::STAT_IF_DELAY } else { 0 };
+            self.stat_publish_phase = self.phase_lcd + delay;
         }
         self.stat_line = new_line;
     }
