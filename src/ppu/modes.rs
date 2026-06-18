@@ -22,19 +22,13 @@ impl PPU {
         self.update_stat_line();
     }
 
-    /// VBlank entry: triggers Mode 1 and Mode 2 OAM STAT sources
+    /// VBlank entry (line 144): evaluates the STAT sources. Mode 1 (now current),
+    /// LYC, and the mode-2/OAM source all apply here — the OAM source because the
+    /// line-start strobe (`oam_stat_strobe`) also pulses at VBlank entry, exactly as on
+    /// hardware (GateBoy TAPA_INT_OAM fires at the line-144 line-start). So this is just
+    /// the normal STAT-line evaluation; no bespoke term needed.
     pub(super) fn check_vblank_stat(&mut self) {
-        self.check_lyc();
-        // On hardware, mode 2 OAM select (bit 5) also fires at VBlank entry
-        let prev = self.stat_line;
-        let lyc_match = self.lcd_status & 0x04 != 0 && self.lcd_status & 0x40 != 0;
-        let mode_1 = self.lcd_status & 0x10 != 0;
-        let mode_2_oam = self.lcd_status & 0x20 != 0;
-        let new_line = lyc_match || mode_1 || mode_2_oam;
-        if new_line && !prev {
-            self.stat_interrupt = true;
-        }
-        self.stat_line = new_line;
+        self.check_lyc(); // sets coincidence bit, then calls update_stat_line
     }
 
     /// STAT blocking: only fire interrupt on rising edge of the combined STAT line
@@ -50,7 +44,9 @@ impl PPU {
         // leading mode 0, which precedes any rendering (`mode3_done` is false there).
         let mode_0 = self.current_mode == 0 && self.mode3_done && self.lcd_status & 0x08 != 0;
         let mode_1 = self.current_mode == 1 && self.lcd_status & 0x10 != 0;
-        let mode_2 = self.current_mode == 2 && self.lcd_status & 0x20 != 0;
+        // The mode-2/OAM STAT source is the line-start strobe (not a mode-2 level) — it
+        // pulses at the top of each visible line and at VBlank entry (GateBoy TAPA_INT_OAM).
+        let mode_2 = self.oam_stat_strobe && self.lcd_status & 0x20 != 0;
 
         let new_line = lyc_match || mode_0 || mode_1 || mode_2;
         if new_line && !self.stat_line {

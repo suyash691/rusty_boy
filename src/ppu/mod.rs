@@ -74,6 +74,13 @@ pub struct PPU {
     /// `mode locked || prev_mode locked`; write-locked = `prev_mode locked`. Measured exact
     /// against gbmicrotest `oam/vram_read/write_l*`.
     pub(crate) prev_mode: u8,
+    /// The mode-2 / OAM STAT interrupt source is NOT a `current_mode == 2` level — on
+    /// hardware it is a **line-start strobe** (GateBoy `TAPA_INT_OAM = !vblank &&
+    /// RUTU_LINE_ENDp`), a brief pulse at the top of every visible line AND at VBlank
+    /// entry (line 144). Modeling it as a level made enabling STAT.5 mid-mode-2 fire
+    /// immediately and never re-arm cleanly per line (gbmicrotest `oam_int_*`). This flag
+    /// is the strobe: set at each line-start, cleared once the line advances past it.
+    pub(crate) oam_stat_strobe: bool,
 }
 
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
@@ -108,6 +115,7 @@ impl PPU {
             mode3_done: false,
             enable_quirk: false,
             prev_mode: 2,
+            oam_stat_strobe: false,
         }
     }
 
@@ -165,6 +173,10 @@ impl PPU {
         // `current_mode` by exactly one dot and drives the read/write-asymmetric lock.
         if on_dot { self.prev_mode = self.current_mode; }
 
+        // The OAM-STAT line-start strobe is a 1-dot pulse at each line top: clear it once
+        // we advance past the line-start dot (it was set at the LY edge below last tick).
+        if on_dot && lx != 0 { self.oam_stat_strobe = false; }
+
         // LY edge: a new scanline began.
         if new_ly != self.ly {
             // The software-enable quirk applies only to its own line 0; once we leave
@@ -172,6 +184,9 @@ impl PPU {
             if new_ly != 0 { self.enable_quirk = false; }
             self.ly = new_ly;
             self.mode3_done = false; // mode 3 happens at most once per line
+            // Line-start strobe: the OAM/mode-2 STAT source pulses at the top of every
+            // visible line AND at VBlank entry (line 144) — see `oam_stat_strobe`.
+            self.oam_stat_strobe = self.ly <= 144;
             if self.ly == 144 {
                 // Entered VBlank.
                 self.set_mode(1);
