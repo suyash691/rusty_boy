@@ -31,6 +31,32 @@ impl PPU {
         self.check_lyc(); // sets coincidence bit, then calls update_stat_line
     }
 
+    /// DMG STAT-write IRQ bug: writing ANY value to $FF41 momentarily drives the STAT
+    /// interrupt line as if ALL four source-enable bits were set, for that write cycle.
+    /// If the current PPU condition (mode 0 HBlank, mode 2/OAM line-start strobe, mode 1
+    /// VBlank, or LYC match) makes that all-enabled line high while the real `stat_line`
+    /// was low, the spurious 0->1 edge latches a STAT IRQ. Called on the $FF41 write
+    /// BEFORE the new enable bits are applied; leaves `stat_line` untouched so the normal
+    /// evaluation that follows still sees the true (post-write) enables. Reproduces
+    /// gbmicrotest `stat_write_glitch_*` — the E2/E0 dot edges emerge from where the mode
+    /// conditions sit, not a tuned constant.
+    pub(crate) fn stat_write_glitch(&mut self) {
+        if !self.is_lcd_enabled() { return; }
+        // Condition with ALL enables forced on (the bug pulse). Mode-0 (HBlank) uses the
+        // 1-dot-delayed view (`current_mode == 0 && prev_mode == 0`) — the mode-3→0
+        // transition the CPU observes lags the internal mode edge by one dot, the same
+        // boundary the OAM/VRAM read-lock uses (gbmicrotest stat_write_glitch_l1_a vs _b
+        // bracket it at dot 252 vs 256).
+        let lyc_match = self.lcd_status & 0x04 != 0;
+        let mode_0 = self.current_mode == 0 && self.prev_mode == 0 && self.mode3_done;
+        let mode_1 = self.current_mode == 1;
+        let mode_2 = self.oam_stat_strobe;
+        let glitch_high = lyc_match || mode_0 || mode_1 || mode_2;
+        if glitch_high && !self.stat_line {
+            self.stat_interrupt = true;
+        }
+    }
+
     /// STAT blocking: only fire interrupt on rising edge of the combined STAT line
     pub(crate) fn update_stat_line(&mut self) {
         // With the LCD off the PPU produces no STAT interrupts; force the line low.

@@ -48,6 +48,10 @@ impl PPU {
                 }
             }
             0xFF41 => {
+                // DMG STAT-write IRQ bug: the write transiently behaves as if all source
+                // enables are set (evaluated against the pre-write stat_line), then the
+                // real enable bits take effect.
+                self.stat_write_glitch();
                 self.lcd_status = (self.lcd_status & 0x07) | (value & 0x78);
                 self.update_stat_line();
             }
