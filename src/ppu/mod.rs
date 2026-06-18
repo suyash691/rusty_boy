@@ -134,14 +134,14 @@ impl PPU {
     /// `mode3_dot`) runs once every 2 phases (on the even/dot boundary), so mode-3 stays
     /// exactly 172 dots.
     ///
-    /// The line ORIGIN is the LogicBoy gate value: mode 2 opens at the `lx == 2` edge
-    /// (besu_scan_donen window [2,162)), scan-done/mode-3 at `lx 162` (normal) / `166`
-    /// (enable line), leaving a 1-dot leading mode-0 sliver (lx 0..1) = the previous
-    /// line's HBlank tail. This origin shift is what flips the OAM/VRAM lock-RELEASE
-    /// group (`*_l1_c`, `lcdon_to_stat*`, `line_153_*`) to passing — measured +6 on
-    /// gbmicrotest. (The bus access stays sampled at phase 6, the per-dot boundary:
-    /// moving it to phase 7 regressed the lock tests, so it was NOT adopted — see the
-    /// regression analysis in zazzy-dreaming-ocean.md.)
+    /// The line ORIGIN matches the per-dot model's boundaries (mode 2 opens at the LY
+    /// edge, scan-done at `lx 160`/`164`) — this per-phase tick is behavior-preserving vs
+    /// the old per-dot engine. The sub-dot OAM/VRAM lock precision is provided NOT by an
+    /// origin shift (that just slides which lock end passes — a wash, see
+    /// zazzy-dreaming-ocean.md) but by `bus_cycle` sampling the lock at a different
+    /// sub-M-cycle phase for reads vs writes (gb-ctr bus diagrams: reads latch later than
+    /// writes commit), which is the only model that satisfies the contradictory
+    /// `vram_read_l1_b` (locked) / `vram_write_l1_a` (unlocked) pair at the same dot.
     fn tick_phase(&mut self) {
         // Advance one phase, wrapping at the frame boundary.
         self.phase_lcd += 1;
@@ -167,9 +167,8 @@ impl PPU {
                 self.window_triggered = false;
                 self.ly_153_early_zero = false;
             } else if self.ly < 144 {
-                // Start of a visible line. Mode 2 opens at the lx==2 edge (LogicBoy
-                // besu_scan_donen window [2,162)), leaving a 1-dot leading mode-0
-                // sliver (lx 0..1) = the previous line's HBlank tail.
+                // Start of a visible line — mode 2 (OAM scan) opens at the LY edge.
+                self.set_mode(2);
                 self.rendering = false;
                 self.check_lyc();
                 self.update_stat_line();
@@ -191,16 +190,10 @@ impl PPU {
         // Visible-line rendering: mode 2 → mode 3 at the scan-done boundary, then the
         // FIFO drives pixel transfer until it signals mode-3 end (→ mode 0).
         if self.ly < 144 {
-            // Mode 2 (OAM scan) opens at lx==2 — LogicBoy's besu_scan_donen window
-            // [2,162). The software-enable quirk line 0 has NO mode 2 (it starts in
-            // mode 0 → straight to mode 3), so it is skipped here.
-            if lx == 2 && !self.enable_quirk && !self.mode3_done && self.current_mode != 2 {
-                self.set_mode(2);
-                self.rendering = false;
-                self.update_stat_line();
-            }
-            // Scan-done / mode-3 entry at lx 162 (normal) or 166 (enable line, +4 phases).
-            let scan_done_lx = if self.enable_quirk { 166 } else { 162 };
+            // Mode 2 (OAM scan) spans 80 dots; the equivalent 80-dot window ends at
+            // lx>=160 (= dot 80). The first line after enable has NO mode 2 — it starts
+            // in mode 0 and scan_done is +4 phases later (lx>=164).
+            let scan_done_lx = if self.enable_quirk { 164 } else { 160 };
             // Normal line enters mode 3 from mode 2; the software-enable quirk line enters
             // from mode 0 (no mode 2). `mode3_done` ensures it happens once per line —
             // without it, the quirk line (whose pre-mode3 mode is 0, same as the post-mode3
