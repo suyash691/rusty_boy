@@ -15,10 +15,18 @@ impl PPU {
         if self.ly == 153 && self.ly_153_early_zero { 0 } else { self.ly }
     }
 
+    /// Sample the LY==LYC compare into the coincidence latch and publish it to STAT bit2.
+    /// This is the once-per-M-cycle synced compare (see `lyc_match_latch`); called by the
+    /// per-M-cycle sampler in `tick_phase` and forced by the FF45/FF41 write paths.
+    pub(crate) fn sample_lyc_match(&mut self) {
+        self.lyc_match_latch = self.effective_ly() == self.ly_compare;
+        if self.lyc_match_latch { self.lcd_status |= 0x04; } else { self.lcd_status &= !0x04; }
+    }
+
+    /// Refresh the coincidence latch + bit2, then re-evaluate the STAT line. Used by the
+    /// write paths (FF45 LYC write, FF41) which force an immediate latch update on hardware.
     pub(crate) fn check_lyc(&mut self) {
-        let eff_ly = self.effective_ly();
-        if eff_ly == self.ly_compare { self.lcd_status |= 0x04; }
-        else { self.lcd_status &= !0x04; }
+        self.sample_lyc_match();
         self.update_stat_line();
     }
 

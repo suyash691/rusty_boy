@@ -81,7 +81,19 @@ pub struct PPU {
     /// immediately and never re-arm cleanly per line (gbmicrotest `oam_int_*`). This flag
     /// is the strobe: set at each line-start, cleared once the line advances past it.
     pub(crate) oam_stat_strobe: bool,
+    /// LYC-coincidence latch (= STAT bit2 source of truth). On hardware the LY==LYC
+    /// compare (`reg_ly == LYC`) is NOT continuous — it is sampled into a latch ONCE PER
+    /// M-CYCLE at a fixed phase (GateBoy `ROPO_LY_MATCH_SYNCp`, latched at `DELTA_BC`).
+    /// STAT bit2 reads this latch. A continuous compare and this once-per-M-cycle latch
+    /// agree on steady lines (LY stable 456 dots) but differ at LY-change boundaries (line
+    /// tops, the 153→0 wrap) — which is exactly where `line_153_lyc*` timing lives. Writes
+    /// to FF45/FF41 force an immediate latch refresh (the hardware write paths do too).
+    pub(crate) lyc_match_latch: bool,
 }
+
+/// Phase within the 8-phase M-cycle (`phase_lcd % 8`) at which the LYC-coincidence latch
+/// samples — GateBoy `DELTA_BC` (the B→C edge, phase index 2).
+const LYC_SAMPLE_PHASE: i64 = 2;
 
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
 const PHASES_PER_LINE: i64 = 912;
@@ -116,6 +128,7 @@ impl PPU {
             enable_quirk: false,
             prev_mode: 2,
             oam_stat_strobe: false,
+            lyc_match_latch: false,
         }
     }
 
@@ -199,12 +212,11 @@ impl PPU {
                 // Start of a visible line — mode 2 (OAM scan) opens at the LY edge.
                 self.set_mode(2);
                 self.rendering = false;
-                self.check_lyc();
                 self.update_stat_line();
             } else {
                 // A VBlank line (145..153).
                 if self.ly == 153 { self.ly_153_early_zero = false; }
-                self.check_lyc();
+                self.update_stat_line();
             }
         }
 
@@ -213,7 +225,16 @@ impl PPU {
             && self.phase_lcd >= 153 * PHASES_PER_LINE + 4
         {
             self.ly_153_early_zero = true;
-            self.check_lyc(); // Re-evaluate LYC with effective LY=0.
+        }
+
+        // LYC coincidence is a synced compare: sample LY==LYC into the latch (and STAT
+        // bit2) ONCE PER M-CYCLE at the BC phase, NOT continuously. This makes bit2 change
+        // on M-cycle boundaries — matching hardware at the LY-change/153-wrap edges while
+        // staying identical to a continuous compare on steady lines.
+        if self.phase_lcd % 8 == LYC_SAMPLE_PHASE {
+            let was = self.lyc_match_latch;
+            self.sample_lyc_match();
+            if self.lyc_match_latch != was { self.update_stat_line(); }
         }
 
         // Visible-line rendering: mode 2 → mode 3 at the scan-done boundary, then the
