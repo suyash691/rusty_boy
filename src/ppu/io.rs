@@ -64,8 +64,31 @@ impl PPU {
     pub fn read_vbk(&self) -> u8 { self.vram_bank_num | 0xFE }
     pub fn write_vbk(&mut self, value: u8) { self.vram_bank_num = value & 1; }
 
+    // --- OAM/VRAM lock predicates (see `prev_mode` doc in mod.rs) -----------------------
+    // VRAM is locked during rendering (mode 3); OAM during OAM-scan + rendering (mode >= 2).
+    // The lock the CPU observes is a read/write-asymmetric, 1-dot-delayed view: a READ
+    // latches late in the M-cycle (sees a lock that just released this dot → `current ||
+    // prev`), a WRITE commits early (lags the mode edge by a dot → `prev` only). Measured
+    // exact against gbmicrotest oam/vram_read/write_l*.
+    pub(crate) fn vram_locked(&self, is_write: bool) -> bool {
+        if is_write { self.prev_mode == 3 } else { self.current_mode == 3 || self.prev_mode == 3 }
+    }
+    pub(crate) fn oam_locked(&self, is_write: bool) -> bool {
+        if is_write {
+            // OAM lock has two independent gate sources: the OAM-scan lock (mode 2) and the
+            // rendering lock (mode 3). For a CPU WRITE (commits early in the M-cycle): the
+            // mode-3/rendering lock is 1-dot-delayed (`prev_mode == 3`, like VRAM), while the
+            // mode-2 scan lock holds only in STEADY mode 2 (`prev == 2 && current == 2`). The
+            // transition dots — mode-0→2 entry and mode-2→3 — are momentarily writable, which
+            // is exactly what `oam_write_l0_e`/`oam_write_l1_c` verify.
+            self.prev_mode == 3 || (self.prev_mode == 2 && self.current_mode == 2)
+        } else {
+            self.current_mode >= 2 || self.prev_mode >= 2
+        }
+    }
+
     pub fn read_vram(&self, addr: u16) -> u8 {
-        if self.current_mode == 3 { return 0xFF; }
+        if self.vram_locked(false) { return 0xFF; }
         let offset = (addr - 0x8000) as usize;
         if self.vram_bank_num == 0 { self.vram[offset] } else { self.vram_bank1[offset] }
     }
@@ -79,11 +102,13 @@ impl PPU {
 
     // --- OAM access ---
     pub fn read_oam(&self, addr: u16) -> u8 {
-        if self.current_mode >= 2 { 0xFF } else { self.oam[(addr - 0xFE00) as usize] }
+        if self.oam_locked(false) { 0xFF } else { self.oam[(addr - 0xFE00) as usize] }
     }
 
+    /// Raw OAM write — caller (MMU `write_byte`) applies the write-lock via `oam_locked`.
+    /// HDMA/DMA paths intentionally bypass the lock.
     pub fn write_oam(&mut self, addr: u16, value: u8) {
-        if self.current_mode < 2 { self.oam[(addr - 0xFE00) as usize] = value; }
+        self.oam[(addr - 0xFE00) as usize] = value;
     }
 
     pub fn dma_write_oam(&mut self, byte: u8) {

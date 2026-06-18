@@ -66,6 +66,14 @@ pub struct PPU {
     /// just preceded by a VBlank residue. Distinguishing the two is essential: both land
     /// at `phase_lcd < 912`, so a phase-derived `first_line` guess conflates them.
     pub(crate) enable_quirk: bool,
+    /// `current_mode` as it was exactly ONE DOT ago. The OAM/VRAM lock the CPU sees is not
+    /// `current_mode` itself but a read/write-asymmetric, 1-dot-delayed view of it — because
+    /// (GateBoy `XYMU_RENDERINGn` + CPU strobes) a CPU READ latches LATE in the M-cycle
+    /// (so it still sees a lock that just released this dot) while a WRITE commits EARLY
+    /// (so it lags the mode edge by a dot on both sides). Lock predicates: read-locked =
+    /// `mode locked || prev_mode locked`; write-locked = `prev_mode locked`. Measured exact
+    /// against gbmicrotest `oam/vram_read/write_l*`.
+    pub(crate) prev_mode: u8,
 }
 
 /// Phases per line (MetroBoy). 912 phases = 456 dots. We advance 2 phases per dot.
@@ -99,6 +107,7 @@ impl PPU {
             mode3_dot: 0,
             mode3_done: false,
             enable_quirk: false,
+            prev_mode: 2,
         }
     }
 
@@ -150,6 +159,11 @@ impl PPU {
         let lx = (self.phase_lcd % PHASES_PER_LINE) as i32; // 0..911
         let new_ly = (self.phase_lcd / PHASES_PER_LINE) as u8; // 0..153
         let on_dot = self.phase_lcd % 2 == 0; // even phase = a dot boundary
+
+        // Snapshot the mode as of the END of the previous dot, BEFORE this dot's mode
+        // transitions run (all mode edges land on even/on_dot phases). This trails
+        // `current_mode` by exactly one dot and drives the read/write-asymmetric lock.
+        if on_dot { self.prev_mode = self.current_mode; }
 
         // LY edge: a new scanline began.
         if new_ly != self.ly {

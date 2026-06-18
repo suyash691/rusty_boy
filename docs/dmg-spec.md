@@ -127,7 +127,14 @@ internal=$ABCC hold at the `boot_hwio` sample point (see §7).
   STAT.3) | (mode1 AND STAT.4) | (mode2 AND STAT.5). Rising-edge only (STAT blocking).
 - **No STAT interrupt while the LCD is off.**
 - Access gating: **OAM locked in modes 2 and 3**; **VRAM locked in mode 3 only**. Locked reads
-  return 0xFF; locked writes are dropped.
+  return 0xFF; locked writes are dropped. **The lock the CPU observes is read/write-asymmetric and
+  trails the STAT mode by ~1 dot** (GateBoy: lock = `XYMU_RENDERINGn`/scan signals, but a CPU READ
+  latches late in the M-cycle while a WRITE commits early, so they straddle the mode edge). Modeled
+  via a 1-dot-delayed mode snapshot `prev_mode` (`src/ppu/`):
+  - VRAM read-locked = `mode==3 || prev_mode==3`; VRAM write-locked = `prev_mode==3`.
+  - OAM read-locked = `mode>=2 || prev_mode>=2`; OAM write-locked =
+    `prev_mode==3 || (prev_mode==2 && mode==2)` (the mode-0→2 and mode-2→3 transition dots are
+    momentarily writable). Verified exact against gbmicrotest `oam/vram_read/write_l{0,1}_*`.
 
 ---
 

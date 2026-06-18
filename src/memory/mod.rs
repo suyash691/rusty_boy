@@ -235,9 +235,7 @@ impl MMU {
             0xD000..=0xDFFF => self.wram_bank[self.wram_bank_num as usize * 0x1000 + (addr - 0xD000) as usize],
             0xE000..=0xEFFF => self.wram_bank[(addr - 0xE000) as usize],
             0xF000..=0xFDFF => self.wram_bank[self.wram_bank_num as usize * 0x1000 + (addr - 0xF000) as usize],
-            0xFE00..=0xFE9F => {
-                if self.ppu.current_mode >= 2 { 0xFF } else { self.ppu.read_oam(addr) }
-            }
+            0xFE00..=0xFE9F => self.ppu.read_oam(addr), // read_oam applies the read-lock
             0xFEA0..=0xFEFF => 0xFF,
             0xFF00..=0xFF7F => self.read_io(addr),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -249,7 +247,7 @@ impl MMU {
         match addr {
             0x0000..=0x7FFF => self.mbc_write(addr, value),
             0x8000..=0x9FFF => {
-                if self.ppu.current_mode != 3 { self.ppu.write_vram(addr, value); }
+                if !self.ppu.vram_locked(true) { self.ppu.write_vram(addr, value); }
             }
             0xA000..=0xBFFF => self.cart_ram_write(addr, value),
             0xC000..=0xCFFF => self.wram_bank[(addr - 0xC000) as usize] = value,
@@ -257,7 +255,7 @@ impl MMU {
             0xE000..=0xEFFF => self.wram_bank[(addr - 0xE000) as usize] = value,
             0xF000..=0xFDFF => self.wram_bank[self.wram_bank_num as usize * 0x1000 + (addr - 0xF000) as usize] = value,
             0xFE00..=0xFE9F => {
-                if self.ppu.current_mode < 2 { self.ppu.write_oam(addr, value); }
+                if !self.ppu.oam_locked(true) { self.ppu.write_oam(addr, value); }
             }
             0xFEA0..=0xFEFF => {}
             0xFF00..=0xFF7F => self.write_io(addr, value),

@@ -283,7 +283,7 @@ fn mooneye_interrupts() {
 
 /// Regression gate: gbmicrotest passing count must never drop below this.
 /// Raise it as the emulator improves; never lower it without a documented reason.
-const GBMICROTEST_BASELINE: usize = 281;
+const GBMICROTEST_BASELINE: usize = 372;
 
 #[test] fn gbmicrotest() {
     let d = ensure_test_roms();
