@@ -316,7 +316,7 @@ fn trace_boot() {
         let m = mmu.ppu.debug_mode();
         let ly = mmu.ppu.debug_ly();
         if (ly, m) != last { eprintln!("  dot {:3}: LY={} mode={}", dot, ly, m); last = (ly, m); }
-        mmu.ppu.update(1);
+        mmu.ppu.update(2);
     }
 }
 
@@ -336,7 +336,7 @@ fn measure_modes() {
     let mut cur = mmu.ppu.debug_mode();
     let mut len = 0u32;
     for _ in 0..2000 {
-        mmu.ppu.update(1);
+        mmu.ppu.update(2);
         let m = mmu.ppu.debug_mode();
         if m == cur { len += 1; } else { runs.push((cur, len)); cur = m; len = 1; if runs.len() > 8 { break; } }
     }
@@ -352,7 +352,7 @@ fn measure_modes() {
     let mut len = 0u32;
     for _ in 0..600 {
         let ly = mmu.ppu.debug_ly();
-        mmu.ppu.update(1);
+        mmu.ppu.update(2);
         let m = mmu.ppu.debug_mode();
         if m == cur { len += 1; } else { runs2.push((cur, len)); cur = m; len = 1; }
         if ly > 0 && runs2.len() > 4 { break; }

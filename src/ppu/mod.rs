@@ -120,23 +120,36 @@ impl PPU {
 
     pub fn update(&mut self, cycles: u32) {
         if !self.is_lcd_enabled() { return; }
-        // The clock delivers one dot per call; loop defensively for cycles > 1.
+        // The clock delivers one PHASE per call (2 phases = 1 dot); loop for cycles > 1.
         for _ in 0..cycles {
-            self.tick_dot();
+            self.tick_phase();
         }
     }
 
-    /// Advance the PPU by one dot using the phase-derived MetroBoy model: LY, the
-    /// mode-2/mode-3 boundary, VBlank, and the LY=153 early-zero are all functions of
-    /// the free-running `phase_lcd` counter (2 phases/dot). Mode-3 length is driven by
-    /// the pixel FIFO (`tick_pixel_transfer`), which is the emergent "pix_count==167".
-    fn tick_dot(&mut self) {
-        // Advance 2 phases per dot, wrapping at the frame boundary.
-        self.phase_lcd += 2;
+    /// Advance the PPU by one PHASE (1/8 M-cycle; 2 phases = 1 dot) using the
+    /// phase-derived gate-level model. LY, the mode-2/mode-3 boundary, VBlank, and the
+    /// LY=153 early-zero are all functions of the free-running `phase_lcd` counter, now
+    /// advancing 1 phase/tick so odd-phase boundaries (the sub-dot OAM/VRAM lock edges
+    /// GateBoy resolves) are representable. The per-DOT machinery (FIFO + sprite fetcher,
+    /// `mode3_dot`) runs once every 2 phases (on the even/dot boundary), so mode-3 stays
+    /// exactly 172 dots.
+    ///
+    /// The line ORIGIN is the LogicBoy gate value: mode 2 opens at the `lx == 2` edge
+    /// (besu_scan_donen window [2,162)), scan-done/mode-3 at `lx 162` (normal) / `166`
+    /// (enable line), leaving a 1-dot leading mode-0 sliver (lx 0..1) = the previous
+    /// line's HBlank tail. This origin shift is what flips the OAM/VRAM lock-RELEASE
+    /// group (`*_l1_c`, `lcdon_to_stat*`, `line_153_*`) to passing — measured +6 on
+    /// gbmicrotest. (The bus access stays sampled at phase 6, the per-dot boundary:
+    /// moving it to phase 7 regressed the lock tests, so it was NOT adopted — see the
+    /// regression analysis in zazzy-dreaming-ocean.md.)
+    fn tick_phase(&mut self) {
+        // Advance one phase, wrapping at the frame boundary.
+        self.phase_lcd += 1;
         if self.phase_lcd >= PHASES_PER_FRAME { self.phase_lcd -= PHASES_PER_FRAME; }
 
-        let lx = (self.phase_lcd % PHASES_PER_LINE) as i32; // 0..911 (even on dot ticks)
+        let lx = (self.phase_lcd % PHASES_PER_LINE) as i32; // 0..911
         let new_ly = (self.phase_lcd / PHASES_PER_LINE) as u8; // 0..153
+        let on_dot = self.phase_lcd % 2 == 0; // even phase = a dot boundary
 
         // LY edge: a new scanline began.
         if new_ly != self.ly {
@@ -154,8 +167,9 @@ impl PPU {
                 self.window_triggered = false;
                 self.ly_153_early_zero = false;
             } else if self.ly < 144 {
-                // Start of a visible line — mode 2 (OAM scan).
-                self.set_mode(2);
+                // Start of a visible line. Mode 2 opens at the lx==2 edge (LogicBoy
+                // besu_scan_donen window [2,162)), leaving a 1-dot leading mode-0
+                // sliver (lx 0..1) = the previous line's HBlank tail.
                 self.rendering = false;
                 self.check_lyc();
                 self.update_stat_line();
@@ -177,11 +191,16 @@ impl PPU {
         // Visible-line rendering: mode 2 → mode 3 at the scan-done boundary, then the
         // FIFO drives pixel transfer until it signals mode-3 end (→ mode 0).
         if self.ly < 144 {
-            // Mode 2 (OAM scan) spans 80 dots. MetroBoy's besu_scan_donen window is
-            // lx in [2,162) (phases); our line tick starts at lx=0, so the equivalent
-            // 80-dot mode 2 ends at lx>=160 (= dot 80). The first line after enable has
-            // NO mode 2 — it starts in mode 0 and scan_done is +4 phases later (lx>=164).
-            let scan_done_lx = if self.enable_quirk { 164 } else { 160 };
+            // Mode 2 (OAM scan) opens at lx==2 — LogicBoy's besu_scan_donen window
+            // [2,162). The software-enable quirk line 0 has NO mode 2 (it starts in
+            // mode 0 → straight to mode 3), so it is skipped here.
+            if lx == 2 && !self.enable_quirk && !self.mode3_done && self.current_mode != 2 {
+                self.set_mode(2);
+                self.rendering = false;
+                self.update_stat_line();
+            }
+            // Scan-done / mode-3 entry at lx 162 (normal) or 166 (enable line, +4 phases).
+            let scan_done_lx = if self.enable_quirk { 166 } else { 162 };
             // Normal line enters mode 3 from mode 2; the software-enable quirk line enters
             // from mode 0 (no mode 2). `mode3_done` ensures it happens once per line —
             // without it, the quirk line (whose pre-mode3 mode is 0, same as the post-mode3
@@ -189,9 +208,10 @@ impl PPU {
             let pre_mode3 = if self.enable_quirk { self.current_mode == 0 } else { self.current_mode == 2 };
             if !self.rendering && !self.mode3_done && pre_mode3 && lx >= scan_done_lx {
                 self.enter_mode3();
-            } else if self.rendering && self.current_mode == 3 {
+            } else if self.rendering && self.current_mode == 3 && on_dot {
                 // Mode 3's first 4 dots are fetcher warm-up (no pixel output yet); our
-                // FIFO models the rest. mode3_dot counts dots since rendering began.
+                // FIFO models the rest. mode3_dot counts dots since rendering began, so
+                // it advances only on the dot boundary (every 2 phases).
                 self.mode3_dot += 1;
                 if self.mode3_dot > 4 && self.tick_pixel_transfer() {
                     if self.fifo.window_fetching { self.window_line += 1; }

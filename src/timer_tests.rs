@@ -650,7 +650,7 @@ mod tests {
         mmu.ppu.phase_lcd = 0;
         let mut dots = 0u32;
         loop {
-            mmu.ppu.update(1);
+            mmu.ppu.update(2); // 2 phases = 1 dot
             dots += 1;
             if mmu.ppu.current_mode == 0 { break; }
             if dots > 600 { break; }
@@ -662,7 +662,7 @@ mod tests {
         mmu.ppu.phase_lcd = 0;
         dots = 0;
         loop {
-            mmu.ppu.update(1);
+            mmu.ppu.update(2); // 2 phases = 1 dot
             dots += 1;
             if mmu.ppu.current_mode == 0 { break; }
             if dots > 600 { break; }
@@ -1213,7 +1213,7 @@ mod tests {
         // Run dot-by-dot through the PPU to find exact mode 3 end
         let mut mode3_end = 0u32;
         for dot in 0..460u32 {
-            mmu.ppu.update(1);
+            mmu.ppu.update(2); // 2 phases = 1 dot
             if mmu.ppu.current_mode == 0 && mode3_end == 0 {
                 mode3_end = dot + (mmu.ppu.phase_lcd % 912 / 2) as u32 - 1;
                 println!("LY={}: mode 3 ended at dot {} (phase_lcd={})", line, dot, mmu.ppu.phase_lcd);

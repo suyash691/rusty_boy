@@ -124,7 +124,8 @@ impl MMU {
     /// advance DMA — the caller owns those so the sub-M-cycle ordering stays exact.
     fn tick_dots(&mut self, t_cycles: u32, div_bit: bool) {
         let dots = if self.double_speed { t_cycles / 2 } else { t_cycles };
-        for _ in 0..dots { self.ppu.update(1); }
+        // The PPU now advances per PHASE (2 phases = 1 dot), so emit 2 phases per dot.
+        for _ in 0..dots { self.ppu.update(2); }
         self.apu.update_with_div(dots, div_bit);
     }
 
@@ -143,17 +144,23 @@ impl MMU {
     /// `access` performs the actual read or write between the two dot phases.
     /// The APU `div_bit` is sampled once, at the end of the M-cycle.
     fn bus_cycle<R>(&mut self, access: impl FnOnce(&mut Self) -> R) -> R {
-        // Phase 1: 3 T-cycles of timer, then the pre-access dots.
+        // Phase 1: 3 T-cycles of timer, then the pre-access PPU phases.
         self.timer.update(3);
-        let pre_dots = if self.double_speed { 1 } else { 3 };
-        for _ in 0..pre_dots { self.ppu.update(1); }
+        // The PPU now ticks per phase (2 phases = 1 dot), so the M-cycle is 8 phases
+        // (4 in double-speed). The access samples the PPU lock/mode at the dot-3
+        // boundary — 6 phases before / 2 after (double-speed 2 / 2). This is the same
+        // 3-dots/access/1-dot split as the old per-dot model. (Sampling at phase 7 — the
+        // GateBoy DELTA_HA read-latch phase — was tried and regressed the OAM/VRAM lock
+        // tests, so the dot-3 boundary is retained; see zazzy-dreaming-ocean.md.)
+        let pre_phases = if self.double_speed { 2 } else { 6 };
+        self.ppu.update(pre_phases);
 
-        // Bus access happens between the two dot phases.
+        // Bus access happens at the dot-3 boundary.
         let r = access(self);
 
-        // Phase 2: final T-cycle of timer + 1 dot, then settle.
+        // Phase 2: final T-cycle of timer + 2 PPU phases (1 dot), then settle.
         self.timer.update(1);
-        self.ppu.update(1);
+        self.ppu.update(2);
         let div_bit = self.timer.div_counter() & (1 << 12) != 0;
         let apu_cycles = if self.double_speed { 2 } else { 4 };
         self.apu.update_with_div(apu_cycles, div_bit);
