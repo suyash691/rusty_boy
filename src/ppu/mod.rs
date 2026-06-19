@@ -254,9 +254,16 @@ impl PPU {
         // FIFO drives pixel transfer until it signals mode-3 end (→ mode 0).
         if self.ly < 144 {
             // Mode 2 (OAM scan) spans 80 dots; the equivalent 80-dot window ends at
-            // lx>=160 (= dot 80). The first line after enable has NO mode 2 — it starts
-            // in mode 0 and scan_done is +4 phases later (lx>=164).
-            let scan_done_lx = if self.enable_quirk { 164 } else { 160 };
+            // lx>=160 (= dot 80). The first line after enable has NO mode 2 — it starts in
+            // mode 0 and goes straight to mode 3, late by the documented **2 T-cycles** (=2
+            // phases, mooneye `lcdon_timing-GS` / dmg-spec §4): scan_done is +2 phases (lx>=162,
+            // dot 81). This places the enable-line mode-0/HBlank raise at line_phase 506 so the
+            // STAT IRQ dispatches one M-cycle earlier than the +4-phase (164) value did, matching
+            // gbmicrotest int_hblank_incs/nops [3D,3E×4,3F×3] while keeping the mode0→mode3 (17
+            // M-cyc) / mode3→mode0 (60 M-cyc) register anchors (lcdon_to_stat3/stat0) — those read
+            // at M-cycle granularity and can't resolve the 162-vs-164 dot, but only 162 aligns the
+            // interrupt edge. (164 was +4 phases = double-counting the skew.)
+            let scan_done_lx = if self.enable_quirk { 162 } else { 160 };
             // Normal line enters mode 3 from mode 2; the software-enable quirk line enters
             // from mode 0 (no mode 2). `mode3_done` ensures it happens once per line —
             // without it, the quirk line (whose pre-mode3 mode is 0, same as the post-mode3
