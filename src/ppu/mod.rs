@@ -30,6 +30,9 @@ pub struct PPU {
     /// STAT_IF_DELAY` (the $FF0F read-latch); the FF41-write glitch sets it to `phase_lcd`
     /// (immediate). Consumed by `collect_interrupts` when `stat_interrupt` is drained.
     pub(crate) stat_publish_phase: i64,
+    /// `phase_lcd` at which the STAT edge was raised — `collect_interrupts` derives the GH
+    /// dispatch boundary from this (hardware groups raises within one M-cycle).
+    pub(crate) stat_raise_phase: i64,
     pub(crate) stat_line: bool,
     pub(crate) hblank_entered: bool,
     pub dma_active: bool,
@@ -121,7 +124,7 @@ impl PPU {
             ly: 0, ly_compare: 0, bg_palette: 0, obj_palette0: 0, obj_palette1: 0,
             window_y: 0, window_x: 0,
             framebuffer: [0; 160 * 144], current_mode: 2,
-            vblank_interrupt: false, stat_interrupt: false, stat_publish_phase: 0, stat_line: false, hblank_entered: false,
+            vblank_interrupt: false, stat_interrupt: false, stat_publish_phase: 0, stat_raise_phase: 0, stat_line: false, hblank_entered: false,
             dma_active: false, dma_source: 0, dma_offset: 0, dma_delay: 0,
             window_line: 0, window_triggered: false,
             sprite_buffer: [(0, 0, 0, 0); 10], sprite_count: 0,

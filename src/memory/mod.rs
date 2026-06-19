@@ -155,8 +155,9 @@ impl MMU {
         let pre_phases = if self.double_speed { 2 } else { 6 };
         self.ppu.update(pre_phases);
 
-        // Commit any pending STAT edge whose publish phase has passed, so a $FF0F read in
-        // `access` sees the read-latched value as of its own (phase-exact) sample point.
+        // Commit pending STAT dispatch/read visibility as of this M-cycle's access phase,
+        // so both dispatch and a $FF0F read see the phase-exact latched value.
+        self.interrupts.commit_stat_dispatch(self.ppu.phase_lcd);
         self.interrupts.commit_stat_if(self.ppu.phase_lcd);
 
         // Bus access happens at the dot-3 boundary.
@@ -180,7 +181,21 @@ impl MMU {
         // (the $FF0F read-latch). Seed pending+publish-phase, then commit any pending STAT
         // whose phase has passed (covers non-read M-cycles; the read path also commits at
         // its access point in bus_cycle).
-        if self.ppu.stat_interrupt { self.ppu.stat_interrupt = false; self.interrupts.request_stat(self.ppu.stat_publish_phase); }
+        if self.ppu.stat_interrupt {
+            self.ppu.stat_interrupt = false;
+            // DISPATCH-visible at the GH boundary on hardware's grid: bucket =
+            // floor((raise_dot - 1)/4), so the IRQ becomes dispatchable at the next grid
+            // boundary dot = ((raise_dot-1)/4 + 1)*4 + 1 (1-dot offset from a naive
+            // per-M-cycle settle). Measured exact vs gbmicrotest int_hblank_incs/nops/halt.
+            let raise = self.ppu.stat_raise_phase;
+            let raise_dot = raise / 2;
+            // GH dispatch grid bucket = floor((raise_dot-1)/4); dispatch becomes visible at
+            // that bucket's M-cycle boundary (dot ≡1 mod 4). Measured vs int_hblank_*.
+            let dispatch_dot = ((raise_dot - 1) / 4) * 4 + 1;
+            let dispatch_phase = dispatch_dot * 2;
+            self.interrupts.request_stat(dispatch_phase, self.ppu.stat_publish_phase);
+        }
+        self.interrupts.commit_stat_dispatch(self.ppu.phase_lcd);
         self.interrupts.commit_stat_if(self.ppu.phase_lcd);
         if self.timer.interrupt_requested { self.timer.interrupt_requested = false; self.interrupts.request(TIMER_INTERRUPT); }
         if self.joypad.interrupt_requested { self.joypad.interrupt_requested = false; self.interrupts.request(crate::interrupts::JOYPAD_INTERRUPT); }
