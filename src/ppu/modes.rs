@@ -92,7 +92,16 @@ impl PPU {
             // PPU-timed edge: CPU-readable in IF only after the read-latch delay. Scoped to
             // the mode-0 (HBlank/WODU) edge — the LYC source re-arms by level and is read
             // immediately (lyc*_int_if_edge); applying the delay to it breaks that.
-            let delay = if mode_0 && !lyc_match { super::STAT_IF_DELAY } else { 0 };
+            let mut delay = if mode_0 && !lyc_match { super::STAT_IF_DELAY } else { 0 };
+            // Boot frame, raise%8==6 (the SCX-penalty HBlank raises that land 2 phases before the
+            // CPU read grid): the read-latch publish at raise+8 (%8==6) becomes readable one
+            // M-cycle too early — the `_b` read sees E2 when hardware wants E0
+            // (hblank_int_scx3/7_if_b). Add one M-cycle so publish lands just past the read grid.
+            // Scoped to raise%8==6: raise%8==0 (scx0/4) pass via dispatch-clearing the bit, and
+            // must NOT shift. Boot-frame only (boot_readback_skew) — the enable frame is unaffected.
+            if mode_0 && !lyc_match && self.boot_readback_skew != 0 && self.phase_lcd.rem_euclid(8) == 6 {
+                delay += 8;
+            }
             self.stat_publish_phase = self.phase_lcd + delay;
             self.stat_raise_phase = self.phase_lcd;
         }
