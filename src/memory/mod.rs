@@ -192,7 +192,16 @@ impl MMU {
             // GH dispatch grid bucket = floor((raise_dot-1)/4); dispatch becomes visible at
             // that bucket's M-cycle boundary (dot ≡1 mod 4). Measured vs int_hblank_*.
             let dispatch_dot = ((raise_dot - 1) / 4) * 4 + 1;
-            let dispatch_phase = dispatch_dot * 2;
+            let mut dispatch_phase = dispatch_dot * 2;
+            // BOOT FRAME ONLY (empirical, STEP-0): the floor grid back-dates dispatch below the
+            // raise for raise%8∈{0,6}, so on the boot frame the STAT IRQ dispatches before an
+            // inline $FF0F read can capture the published bit (hblank_int_scx{0,3,4,7}_if_*).
+            // Defer dispatch one M-cycle for that residue class. Gated on boot_readback_skew so
+            // the enable-frame int_hblank_incs/nops/halt bucketing (which depends on the floor
+            // back-dating) is untouched.
+            if self.ppu.boot_readback_skew != 0 && matches!(raise.rem_euclid(8), 0 | 6) {
+                dispatch_phase += 8;
+            }
             self.interrupts.request_stat(dispatch_phase, self.ppu.stat_publish_phase, raise);
         }
         self.interrupts.commit_stat_dispatch(self.ppu.phase_lcd);
