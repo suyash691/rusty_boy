@@ -193,7 +193,7 @@ impl MMU {
             // that bucket's M-cycle boundary (dot ≡1 mod 4). Measured vs int_hblank_*.
             let dispatch_dot = ((raise_dot - 1) / 4) * 4 + 1;
             let dispatch_phase = dispatch_dot * 2;
-            self.interrupts.request_stat(dispatch_phase, self.ppu.stat_publish_phase);
+            self.interrupts.request_stat(dispatch_phase, self.ppu.stat_publish_phase, raise);
         }
         self.interrupts.commit_stat_dispatch(self.ppu.phase_lcd);
         self.interrupts.commit_stat_if(self.ppu.phase_lcd);

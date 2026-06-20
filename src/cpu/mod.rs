@@ -104,8 +104,26 @@ impl CPU {
         let pending = memory.interrupts.pending();
         if pending == 0 { return 0; }
 
+        let was_halted = self.halt;
         self.halt = false;
         if !self.ime { return 0; }
+
+        // HALT-exit timing (CD vs GH split, GateBoy.cpp:451-456 vs :476). A halted CPU un-halts on
+        // the DELTA_CD IF sample, half an M-cycle before the DELTA_GH dispatch our `pending()`
+        // models. When the ONLY actionable interrupt is STAT and its raise fell in the CD..GH
+        // window (the GH grid back-dated it ≥4 phases), the un-halt is one M-cycle later than
+        // `pending()` says: withhold the wake this iteration (stay halted, no tick) so `step()`
+        // runs its normal idle `tick(4)` — the genuine extra HALT cycle — then dispatch next
+        // iteration. One-shot via `stat_halt_deferred` (the phase difference is constant per raise).
+        // Scoped to STAT only: non-STAT sources have no back-dating grid and dispatch correctly.
+        if was_halted
+            && pending & !crate::interrupts::LCD_STAT_INTERRUPT == 0
+            && memory.interrupts.stat_halt_should_defer()
+        {
+            memory.interrupts.stat_halt_deferred = true;
+            self.halt = true; // stay halted one more M-cycle (step() runs the idle tick)
+            return 0;
+        }
 
         self.ime = false;
 
