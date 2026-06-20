@@ -97,6 +97,20 @@ pub struct PPU {
     /// tops, the 153→0 wrap) — which is exactly where `line_153_lyc*` timing lives. Writes
     /// to FF45/FF41 force an immediate latch refresh (the hardware write paths do too).
     pub(crate) lyc_match_latch: bool,
+    /// Boot-handoff READBACK skew (phases). On real hardware the boot ROM hands off mid-frame
+    /// leaving two counters out of sync for one frame: a render/interrupt counter (mode edges
+    /// for rendering, the WODU/HBlank STAT interrupt, FIFO, OAM strobe, LYC — our live
+    /// `current_mode`/`phase_lcd`) and a scan-position counter ~14 phases (7 dots) BEHIND it that
+    /// drives the **CPU-visible STAT mode bits ($FF41) and the OAM/VRAM bus lock**. This offset
+    /// (14 on the boot frame, 0 otherwise) makes the readback/lock paths observe the mode as it was
+    /// `boot_readback_skew` phases ago — WITHOUT moving the render/interrupt edges. Measured vs
+    /// gbmicrotest poweron_stat/oam/vram (want +14) AND boot-frame hblank_int_*_if_* (want the WODU
+    /// edge unshifted). Cleared at VBlank entry + LCD-off. See `readback_mode`/`lock_modes`.
+    pub(crate) boot_readback_skew: i64,
+    /// `current_mode` as of 1..8 dots ago (`mode_history[k]` = mode (k+1) dots ago), maintained at
+    /// each dot boundary alongside `prev_mode`. Feeds the delayed readback/lock view above:
+    /// 14 phases = 7 dots ago = `mode_history[6]`; its prev-pair is `mode_history[7]`.
+    pub(crate) mode_history: [u8; 8],
 }
 
 /// Phase within the 8-phase M-cycle (`phase_lcd % 8`) at which the LYC-coincidence latch
@@ -142,6 +156,8 @@ impl PPU {
             prev_mode: 2,
             oam_stat_strobe: false,
             lyc_match_latch: false,
+            boot_readback_skew: 0,
+            mode_history: [2; 8],
         }
     }
 
@@ -159,6 +175,35 @@ impl PPU {
         self.rendering = false;
         self.mode3_done = false;
         self.enable_quirk = false; // boot line 0 is a NORMAL line (has mode 2), not the quirk
+        // Boot handoff: the CPU-visible mode/lock readback trails the render counter by 14 phases
+        // (see field doc). Seed the history to the current (VBlank/mode-1) residue so early reads
+        // see the pre-line-0 tail (the documented mode-0/mode-1 glitch) rather than a stale 2.
+        self.boot_readback_skew = 14;
+        self.mode_history = [1; 8];
+    }
+
+    /// CPU-visible mode for $FF41 readback. On the boot frame this trails the live `current_mode`
+    /// by `boot_readback_skew` phases (the scan/readback counter behind the render counter);
+    /// elsewhere it IS `current_mode`. Never consumed by the render/interrupt path.
+    pub(crate) fn readback_mode(&self) -> u8 {
+        if self.boot_readback_skew == 0 { return self.current_mode; }
+        let m = self.mode_history[(self.boot_readback_skew / 2 - 1) as usize];
+        // Boot mode-0 "glitch hblank": once the live PPU has wrapped onto a visible line (ly<144)
+        // but the delayed view still shows the VBlank residue (mode 1), the scan counter's own
+        // line has already started in mode 0 (HBlank, pre-OAM) — it has not reached OAM open yet.
+        // So the glitch reads mode 0, not the stale mode 1 (gbmicrotest poweron_stat_006).
+        if m == 1 && self.ly < 144 { 0 } else { m }
+    }
+
+    /// (current, prev) mode pair the OAM/VRAM lock predicate observes. Same 14-phase boot-frame
+    /// delay as `readback_mode`, preserving the existing read/write-asymmetric prev/current model
+    /// (the pair is just sampled 7 dots earlier on the boot frame).
+    pub(crate) fn lock_modes(&self) -> (u8, u8) {
+        if self.boot_readback_skew == 0 { (self.current_mode, self.prev_mode) }
+        else {
+            let i = (self.boot_readback_skew / 2 - 1) as usize;
+            (self.mode_history[i], self.mode_history[i + 1])
+        }
     }
 
     pub fn update(&mut self, cycles: u32) {
@@ -221,6 +266,9 @@ impl PPU {
                 self.window_line = 0;
                 self.window_triggered = false;
                 self.ly_153_early_zero = false;
+                // The two boot-handoff counters re-converge by VBlank; clear the readback skew so
+                // frame 2+ observes the live mode/lock (boot-frame-only effect).
+                self.boot_readback_skew = 0;
             } else if self.ly < 144 {
                 // Start of a visible line — mode 2 (OAM scan) opens at the LY edge.
                 self.set_mode(2);
@@ -284,6 +332,16 @@ impl PPU {
                     self.update_stat_line();
                 }
             }
+        }
+
+        // Record the delayed-mode history at the END of the dot (AFTER this dot's mode
+        // transitions), so mode_history[k] = the post-transition mode (k+1) dots ago. Feeds the
+        // boot-frame readback/lock delay; inert when boot_readback_skew==0. Recording post-
+        // transition makes the delayed mode-3 window exclusive at its end (poweron_oam/vram_070
+        // released by M-cyc 70) while still mode3 at M-cyc 69.
+        if on_dot {
+            self.mode_history.copy_within(0..7, 1);
+            self.mode_history[0] = self.current_mode;
         }
     }
 

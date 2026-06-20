@@ -3,7 +3,11 @@ use super::PPU;
 impl PPU {
     pub fn read_io(&self, addr: u16) -> u8 {
         match addr {
-            0xFF40 => self.lcd_control, 0xFF41 => self.lcd_status | 0x80,
+            0xFF40 => self.lcd_control,
+            // STAT: enable/LYC bits from lcd_status; the 2 MODE bits come from the readback view
+            // (boot-frame-delayed; == current_mode elsewhere) so $FF41 reflects the scan/readback
+            // counter, distinct from the render/interrupt counter on the boot handoff frame.
+            0xFF41 => (self.lcd_status & 0xFC) | self.readback_mode() | 0x80,
             0xFF42 => self.scroll_y, 0xFF43 => self.scroll_x,
             0xFF44 => self.effective_ly(), 0xFF45 => self.ly_compare,
             0xFF46 => (self.dma_source >> 8) as u8,
@@ -31,6 +35,7 @@ impl PPU {
                     self.window_line = 0;
                     self.window_triggered = false;
                     self.stat_line = false;
+                    self.boot_readback_skew = 0; // a software LCD cycle is not the boot handoff
                 } else if !was_on && now_on {
                     // LCD turned on: MetroBoy enable-glitch — the phase counter restarts at
                     // phase 8 (= 4 dots / 1 M-cycle "late"), and line 0 is the `first_line`
@@ -75,19 +80,33 @@ impl PPU {
     // prev`), a WRITE commits early (lags the mode edge by a dot → `prev` only). Measured
     // exact against gbmicrotest oam/vram_read/write_l*.
     pub(crate) fn vram_locked(&self, is_write: bool) -> bool {
-        if is_write { self.prev_mode == 3 } else { self.current_mode == 3 || self.prev_mode == 3 }
+        // The lock the CPU observes follows whichever counter says locked. On the boot handoff
+        // frame the render counter (live current/prev) and the scan counter (`lock_modes`, +14
+        // delayed) are transiently offset and BOTH drive the bus, so the lock is the UNION of the
+        // two windows: locked-start from the render counter, locked-end from the scan counter
+        // (gbmicrotest poweron_oam/vram — locked across the boot line-start glitch AND held to the
+        // delayed mode-3 end). Off the boot frame the two views are identical → unchanged.
+        self.vram_locked_view(is_write, self.current_mode, self.prev_mode)
+            || { let (c, p) = self.lock_modes(); self.vram_locked_view(is_write, c, p) }
+    }
+    fn vram_locked_view(&self, is_write: bool, cur: u8, prev: u8) -> bool {
+        if is_write { prev == 3 } else { cur == 3 || prev == 3 }
     }
     pub(crate) fn oam_locked(&self, is_write: bool) -> bool {
+        self.oam_locked_view(is_write, self.current_mode, self.prev_mode)
+            || { let (c, p) = self.lock_modes(); self.oam_locked_view(is_write, c, p) }
+    }
+    fn oam_locked_view(&self, is_write: bool, cur: u8, prev: u8) -> bool {
         if is_write {
             // OAM lock has two independent gate sources: the OAM-scan lock (mode 2) and the
             // rendering lock (mode 3). For a CPU WRITE (commits early in the M-cycle): the
-            // mode-3/rendering lock is 1-dot-delayed (`prev_mode == 3`, like VRAM), while the
-            // mode-2 scan lock holds only in STEADY mode 2 (`prev == 2 && current == 2`). The
+            // mode-3/rendering lock is 1-dot-delayed (`prev == 3`, like VRAM), while the
+            // mode-2 scan lock holds only in STEADY mode 2 (`prev == 2 && cur == 2`). The
             // transition dots — mode-0→2 entry and mode-2→3 — are momentarily writable, which
             // is exactly what `oam_write_l0_e`/`oam_write_l1_c` verify.
-            self.prev_mode == 3 || (self.prev_mode == 2 && self.current_mode == 2)
+            prev == 3 || (prev == 2 && cur == 2)
         } else {
-            self.current_mode >= 2 || self.prev_mode >= 2
+            cur >= 2 || prev >= 2
         }
     }
 
